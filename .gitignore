@@ -1,0 +1,23 @@
+# Entornos virtuales
+venv/
+labelstudio_venv/
+
+# Modelos entrenados (pesan mucho, mejor no versionarlos en git normal)
+*.pt
+runs/
+weights/
+
+# Datos de Label Studio / Docker
+label-studio-ml-backend/label_studio_ml/examples/yolo/data/
+label-studio-ml-backend/label_studio_ml/examples/yolo/cache_dir/
+label-studio-ml-backend/label_studio_ml/examples/yolo/models/*.pt
+
+# Cache de Python
+__pycache__/
+*.pyc
+
+# Configuración local con datos sensibles
+.env
+
+# Otros
+hud_config.json.bak

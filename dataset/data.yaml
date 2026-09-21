@@ -1,0 +1,27 @@
+path: C:/DragonAI/dataset
+
+train: images/train
+val: images/val
+
+names:
+  0: archers_enemy
+  1: archers_player
+  2: giant_enemy
+  3: giant_player
+  4: goblin_brawler_enemy
+  5: goblin_cage_enemy
+  6: goblin_hut_enemy
+  7: goblins_enemy
+  8: king_tower_enemy
+  9: king_tower_player
+  10: knight_enemy
+  11: knight_player
+  12: minions_enemy
+  13: minions_player
+  14: minipekka_enemy
+  15: minipekka_player
+  16: musketeer_enemy
+  17: musketeer_player
+  18: princess_tower_enemy
+  19: princess_tower_player
+  20: spear_goblins_enemy
