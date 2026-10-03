@@ -45,7 +45,7 @@ except ImportError:
 # ============ CONFIGURACION ============
 
 WINDOW_TITLE = "Clash Royale"
-MODEL_PATH = r"C:\DragonAI\runs\detect\train-3\weights\best.pt"
+MODEL_PATH = r"C:\DragonAI\runs\detect\train-7\weights\best.pt"
 HUD_CONFIG_PATH = "hud_config.json"
 TEMPLATES_DIR = "templates"
 
@@ -53,15 +53,16 @@ CONFIDENCE_THRESHOLD_YOLO = 0.5
 UMBRAL_MATCH_CARTAS = 0.3
 ELIXIR_COLOR_BGR = np.array([200, 50, 200])
 ELIXIR_TOLERANCIA = 45
-MITAD_CAMPO_Y = 0.5
-UMBRAL_CERCA_TORRE_Y = 0.60
+MITAD_CAMPO_Y = 0.46
+UMBRAL_CERCA_TORRE_Y = 0.53
 
-COOLDOWN_SEGUNDOS = 1
+COOLDOWN_SEGUNDOS = 3
+
 
 ZONAS_Y = {
     "detras_torre": 0.75,
     "frente_torre": 0.62,
-    "puente": 0.51,
+    "puente": 0.48,
 }
 
 FALLBACK_REGION = {"left": 0, "top": 0, "width": 1280, "height": 720}
@@ -73,15 +74,15 @@ TORRES = {
     "princess_tower_player", "princess_tower_enemy",
 }
 
-SWARMS_ENEMY = {"minions_enemy", "archers_enemy", "goblins_enemy", "spear_goblins_enemy"}
+SWARMS_ENEMY = {"minions_enemy", "archers_enemy", "goblins_enemy", "spear_goblins_enemy", "squeleton_dragon_enemy"}
 
-TROPAS_OBJETIVO_FIREBALL = {"minions_enemy", "archers_enemy", "musketeer_enemy"}
+TROPAS_OBJETIVO_FIREBALL = {"archers_enemy", "musketeer_enemy", "barbarian_enemy", "squeleton_dragon_enemy"}
 
-AIR_COUNTERS_ENEMY = {"archers_enemy", "musketeer_enemy"}
+AIR_COUNTERS_ENEMY = {"archers_enemy", "musketeer_enemy", "wizard_enemy"}
 
-TANQUES_ENEMY = {"giant_enemy"}
+TANQUES_ENEMY = {"giant_enemy", "battle_ram_enemy"}
 
-MINITANQUES_ENEMY = {"knight_enemy", "minipekka_enemy", "goblin_brawler_enemy"}
+MINITANQUES_ENEMY = {"knight_enemy", "minipekka_enemy", "goblin_brawler_enemy", "valkyrie_enemy", "megaminion_enemy"}
 
 TANQUES = {"giant_player"}
 
@@ -296,7 +297,7 @@ def val_giant(estado: GameState):
 
     # +0.2 si hay mosqueteras o arqueras aliadas en mi lado de la arena
     aircounters_aliados = any(
-        t.tipo in AIR_COUNTERS and t.y_norm > 0.5
+        t.tipo in AIR_COUNTERS and t.y_norm > MITAD_CAMPO_Y
         for t in estado.tropas_aliadas
     )
     if aircounters_aliados:
@@ -344,7 +345,7 @@ def val_musketeer(estado: GameState):
 
     # +0.2 si hay swarms enemigos en mi lado de la arena
     swarms_en_mi_lado = any(
-        t.tipo in SWARMS_ENEMY and t.y_norm > 0.4
+        t.tipo in SWARMS_ENEMY and t.y_norm > MITAD_CAMPO_Y
         for t in estado.tropas_enemigas
     )
     if swarms_en_mi_lado:
@@ -361,34 +362,26 @@ def val_musketeer(estado: GameState):
     return round(min(valor, 1.0), 2)
 
 def val_arrows(estado: GameState):
-    valor = 0.1
+    valor = 0.0
 
-    tropas_enemigas = estado.tropas_enemigas
+    tropas_enemigas = [t for t in estado.tropas_enemigas if t.y_norm > 0.3]
 
-    # +0.3 si hay minions o archers enemigos en el campo
-    if any(t.tipo in SWARMS_ENEMY for t in tropas_enemigas):
-        valor += 0.3
-
-    # +0.2 si hay mas de 3 tropas enemigas agrupadas (cerca unas de otras)
+    # +0.4 si hay mas de 3 tropas enemigas agrupadas (cerca unas de otras) y hay cartas que mueren a flechas
     cantidad, _ = encontrar_grupo_mas_numeroso(tropas_enemigas, radio=0.15)
-    if cantidad > 3:
-        valor += 0.2
+    if cantidad > 3 and any(t.tipo in SWARMS_ENEMY for t in tropas_enemigas):
+        valor += 0.4
 
     return round(min(valor, 1.0), 2)
 
 def val_fireball(estado: GameState):
-    valor = 0.1
+    valor = 0.0
 
-    tropas_enemigas = estado.tropas_enemigas
+    tropas_enemigas = [t for t in estado.tropas_enemigas if t.y_norm > 0.3]
 
-    # +0.3 si hay minions o archers enemigos en el campo
-    if any(t.tipo in TROPAS_OBJETIVO_FIREBALL for t in tropas_enemigas):
-        valor += 0.2
-
-    # +0.2 si hay mas de 2 tropas enemigas agrupadas (cerca unas de otras)
+    # +0.4 si hay mas de 2 tropas enemigas agrupadas (cerca unas de otras) y hay tropas enemigas que mueren a fireball
     cantidad, _ = encontrar_grupo_mas_numeroso(tropas_enemigas, radio=0.1)
-    if cantidad > 2:
-        valor += 0.1
+    if cantidad > 1 and any(t.tipo in TROPAS_OBJETIVO_FIREBALL for t in tropas_enemigas):
+        valor += 0.4
 
     return round(min(valor, 1.0), 2)
 
@@ -397,7 +390,7 @@ def val_minipekka(estado: GameState):
 
     # +0.5 si hay un giant enemigo en mi lado de la arena
     giant_en_mi_lado = any(
-        t.tipo in TANQUES_ENEMY and t.y_norm > 0.5
+        t.tipo in TANQUES_ENEMY and t.y_norm > MITAD_CAMPO_Y
         for t in estado.tropas_enemigas
     )
     if giant_en_mi_lado:
@@ -405,7 +398,7 @@ def val_minipekka(estado: GameState):
 
     # +0.2 si hay mosqueteras o arqueras enemigos en mi lado de la arena
     aircounters_en_mi_lado = any(
-        t.tipo in AIR_COUNTERS_ENEMY and t.y_norm > 0.5
+        t.tipo in AIR_COUNTERS_ENEMY and t.y_norm > MITAD_CAMPO_Y
         for t in estado.tropas_enemigas
     )
     if aircounters_en_mi_lado:
@@ -413,7 +406,7 @@ def val_minipekka(estado: GameState):
 
     # +0.3 si hay minitanques enemigos en mi lado de la arena
     minitanques_en_mi_lado = any(
-        t.tipo in MINITANQUES_ENEMY and t.y_norm > 0.5
+        t.tipo in MINITANQUES_ENEMY and t.y_norm > MITAD_CAMPO_Y
         for t in estado.tropas_enemigas
     )
     if minitanques_en_mi_lado:
@@ -421,7 +414,7 @@ def val_minipekka(estado: GameState):
 
     # -0.2 si hay swarms enemigos en mi lado de la arena
     swarms_en_mi_lado = any(
-        t.tipo in SWARMS_ENEMY and t.y_norm > 0.5
+        t.tipo in SWARMS_ENEMY and t.y_norm > MITAD_CAMPO_Y
         for t in estado.tropas_enemigas
     )
     if swarms_en_mi_lado:
@@ -430,7 +423,7 @@ def val_minipekka(estado: GameState):
     return round(min(valor, 1.0), 2)
 
 def val_minions(estado: GameState):
-    valor = 0.2
+    valor = 0.1
 
     # +0.3 si hay un tanque enemigo en mi lado de la arena
     tanques_en_mi_lado = any(
@@ -486,7 +479,7 @@ def val_archers(estado: GameState):
 def valor_esperar(estado: GameState):
     valor = 0.3
 
-    if estado.elixir > 9:
+    if estado.elixir > 8:
         valor = 0.1
 
     return valor
@@ -564,35 +557,26 @@ def elegir_zona(estado: GameState, nombre_carta: str = None) -> str:
     """Decide dinamicamente que zona usar, mirando si hay amenazas
     enemigas invadiendo mi lado del campo y que tan cerca estan."""
     tropas_enemigas_en_mi_lado = [
-        t for t in estado.tropas_enemigas if t.y_norm > MITAD_CAMPO_Y
+        t for t in estado.tropas_enemigas if t.y_norm > 0.45
     ]
     soportes_atras = any(
-            t.tipo in (AIR_COUNTERS | MINITANQUES) and t.y_norm > 0.6
+            t.tipo in (AIR_COUNTERS | MINITANQUES) and t.y_norm > 0.51
             for t in estado.tropas_aliadas
         )
     cartas_atacando = any(
             t.tipo in (AIR_COUNTERS | MINITANQUES | TANQUES) and t.y_norm < 0.5
             for t in estado.tropas_aliadas
         )
-    if not tropas_enemigas_en_mi_lado:
-        if cartas_atacando:
-            return "puente"
-        else:
-            return "detras_torre"  
+    if not tropas_enemigas_en_mi_lado and cartas_atacando:
+        return "puente" 
     elif nombre_carta in TANQUES | MINITANQUES and soportes_atras:
         return "puente"
-
-    # Nos quedamos con la amenaza mas avanzada (la que tiene mayor y_norm,
-    # es decir, la mas cerca de mi torre)
-    amenaza_mas_cercana = max(tropas_enemigas_en_mi_lado, key=lambda t: t.y_norm)
-
-    if amenaza_mas_cercana.y_norm > UMBRAL_CERCA_TORRE_Y:
-        return "frente_torre"  # peligro inminente, defensa a ultima linea
+    elif not tropas_enemigas_en_mi_lado:
+        return "detras_torre"
     else:
-        return "puente"  # hay invasion pero da tiempo a interceptar antes
+        return "frente_torre"
+
     
-
-
 
 def elegir_carril(estado: GameState) -> float:
     """Devuelve la coordenada x_norm del carril, priorizando el lado
@@ -648,18 +632,20 @@ def main():
         estado, resultados_yolo = construir_game_state(frame, modelo_yolo, hud_config, plantillas)
 
         ahora = time.time()
+        decision = None  # evita usar un valor obsoleto de la iteracion anterior
+        print(f"[debug] tiempo desde ultima jugada: {ahora - ultima_jugada_timestamp:.2f}s")
         if ahora - ultima_jugada_timestamp > COOLDOWN_SEGUNDOS:
             decision = decidir_jugada(estado)
 
-        if decision is not None:
-            if decision["carta"] in HECHIZOS:
-                posicion = calcular_posicion_objetivo_hechizo(decision["carta"], estado)
-            else:
-                posicion = calcular_posicion_despliegue(estado)
+            if decision is not None:
+                if decision["carta"] in HECHIZOS:
+                    posicion = calcular_posicion_objetivo_hechizo(decision["carta"], estado)
+                else:
+                    posicion = calcular_posicion_despliegue(estado, decision["carta"])
 
-            jugado = jugar_carta(decision["carta"], estado.mano, hud_config, region, posicion)
-            if jugado:
-                ultima_jugada_timestamp = ahora
+                jugado = jugar_carta(decision["carta"], estado.mano, hud_config, region, posicion)
+                if jugado:
+                    ultima_jugada_timestamp = ahora
 
         print(estado.resumen())
 

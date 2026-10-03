@@ -217,7 +217,7 @@ def cargar_plantillas():
     return plantillas
 
 
-def identificar_carta(slot_img, plantillas, umbral=0.4):
+def identificar_carta(slot_img, plantillas, umbral=0.35):
     """Compara el recorte de un slot contra todas las plantillas cargadas
     y devuelve (nombre_mas_parecido, score) o (None, 0) si no hay match
     suficientemente bueno o el recorte es invalido."""
