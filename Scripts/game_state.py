@@ -28,6 +28,7 @@ import os
 import time
 from dataclasses import dataclass, field
 
+import pyautogui
 import math
 import cv2
 import numpy as np
@@ -42,10 +43,11 @@ except ImportError:
     gw = None
 
 
+
 # ============ CONFIGURACION ============
 
 WINDOW_TITLE = "Clash Royale"
-MODEL_PATH = r"C:\DragonAI\runs\detect\train-7\weights\best.pt"
+MODEL_PATH = r"C:\DragonAI\runs\detect\train-9\weights\best.pt"
 HUD_CONFIG_PATH = "hud_config.json"
 TEMPLATES_DIR = "templates"
 
@@ -53,10 +55,10 @@ CONFIDENCE_THRESHOLD_YOLO = 0.5
 UMBRAL_MATCH_CARTAS = 0.3
 ELIXIR_COLOR_BGR = np.array([200, 50, 200])
 ELIXIR_TOLERANCIA = 45
-MITAD_CAMPO_Y = 0.46
-UMBRAL_CERCA_TORRE_Y = 0.53
+MITAD_CAMPO_Y = 0.43
+UMBRAL_CERCA_TORRE_Y = 0.5
 
-COOLDOWN_SEGUNDOS = 3
+COOLDOWN_SEGUNDOS = 2
 
 
 ZONAS_Y = {
@@ -74,15 +76,17 @@ TORRES = {
     "princess_tower_player", "princess_tower_enemy",
 }
 
-SWARMS_ENEMY = {"minions_enemy", "archers_enemy", "goblins_enemy", "spear_goblins_enemy", "squeleton_dragon_enemy"}
+SWARMS_ENEMY = {"minions_enemy", "archers_enemy", "goblins_enemy", "spear_goblins_enemy", "bat_enemy", "bomber_enemy", "electro_spirit_enemy", "fire_spirit_enemy"}
 
-TROPAS_OBJETIVO_FIREBALL = {"archers_enemy", "musketeer_enemy", "barbarian_enemy", "squeleton_dragon_enemy"}
+TROPAS_OBJETIVO_FIREBALL = {"archers_enemy", "musketeer_enemy", "barbarian_enemy", "squeleton_dragon_enemy", "wizard_enemy", "witch_enemy"}
 
-AIR_COUNTERS_ENEMY = {"archers_enemy", "musketeer_enemy", "wizard_enemy"}
+AIR_COUNTERS_ENEMY = {"archers_enemy", "musketeer_enemy", "wizard_enemy", "baby_dragon_enemy", "flying_machine_enemy", "witch_enemy"}
 
-TANQUES_ENEMY = {"giant_enemy", "battle_ram_enemy"}
+TANQUES_ENEMY = {"giant_enemy", "battle_ram_enemy", "hog_rider_enemy"}
 
-MINITANQUES_ENEMY = {"knight_enemy", "minipekka_enemy", "goblin_brawler_enemy", "valkyrie_enemy", "megaminion_enemy"}
+MINITANQUES_ENEMY = {"knight_enemy", "minipekka_enemy", "goblin_brawler_enemy", "valkyrie_enemy", "megaminion_enemy", "pekka_enemy"}
+
+ESTRUCUTAS_ENEMY = {"bomb_tower_enemy", "canon_enemy", "goblin_cage_enemy", "goblin_hut_enemy", "inferno_tower_enemy", "tombstone_enemy"}
 
 TANQUES = {"giant_player"}
 
@@ -96,6 +100,17 @@ RADIO_AGRUPACION_HECHIZO = {
     "arrows": 0.15,
     "fireball": 0.10,
 }
+CARTAS_TANQUE = {"giant"}
+CARTAS_MINITANQUE = {"knight", "minipekka", "minions"}
+CARTAS_AIR_COUNTER = {"musketeer", "archers"}
+
+OFFSET_DETRAS_TROPA = 0.08
+
+TEMPLATE_REMATCH_PATH = r"C:\DragonAI\templates\jugar_de_nuevo.png"
+UMBRAL_MATCH_REMATCH = 0.75
+REVISAR_REMATCH_CADA_N_FRAMES = 15  # no hace falta comprobarlo en cada frame
+
+RADIO_CERCANIA_ALIADA_HECHIZO = 0.1
 
 # =========================================
 
@@ -159,6 +174,19 @@ def capturar_frame(sct, region):
     raw = np.array(sct.grab(region))
     return cv2.cvtColor(raw, cv2.COLOR_BGRA2BGR)
 
+def buscar_boton_rematch(frame, plantilla, umbral=UMBRAL_MATCH_REMATCH):
+    """Busca la plantilla del boton 'Jugar de Nuevo' en todo el frame.
+    Devuelve (encontrado, centro_x_pixel, centro_y_pixel, score)."""
+    resultado = cv2.matchTemplate(frame, plantilla, cv2.TM_CCOEFF_NORMED)
+    _, score, _, max_loc = cv2.minMaxLoc(resultado)
+
+    if score < umbral:
+        return False, None, None, score
+
+    h, w = plantilla.shape[:2]
+    centro_x = max_loc[0] + w // 2
+    centro_y = max_loc[1] + h // 2
+    return True, centro_x, centro_y, score
 
 # ---------- HUD: ELIXIR Y CARTAS ----------
 
@@ -217,6 +245,46 @@ def identificar_carta(slot_img, plantillas, umbral=UMBRAL_MATCH_CARTAS):
         return None, mejor_score
     return mejor_nombre, mejor_score
 
+class TorreTracker:
+    """Detecta cuando una princess tower enemiga ha sido destruida: deja
+    de verse de forma sostenida tras haber sido confirmada como presente
+    durante un tiempo (evita falsos positivos por un frame fallido o una
+    tropa tapandola momentaneamente)."""
+
+    FRAMES_CONFIRMAR_VISTA = 10
+    FRAMES_AUSENTE_PARA_DESTRUIDA = 30
+
+    def __init__(self):
+        self.vista_consecutiva = {"izquierda": 0, "derecha": 0}
+        self.ausente_consecutiva = {"izquierda": 0, "derecha": 0}
+        self.confirmada = {"izquierda": False, "derecha": False}
+        self.destruida = {"izquierda": False, "derecha": False}
+
+    def actualizar(self, tropas):
+        vista_este_frame = {"izquierda": False, "derecha": False}
+
+        for t in tropas:
+            if t.tipo == "princess_tower_enemy":
+                lado = "izquierda" if t.x_norm < 0.5 else "derecha"
+                vista_este_frame[lado] = True
+
+        for lado in ("izquierda", "derecha"):
+            if self.destruida[lado]:
+                continue
+
+            if vista_este_frame[lado]:
+                self.vista_consecutiva[lado] += 1
+                self.ausente_consecutiva[lado] = 0
+                if self.vista_consecutiva[lado] >= self.FRAMES_CONFIRMAR_VISTA:
+                    self.confirmada[lado] = True
+            else:
+                self.vista_consecutiva[lado] = 0
+                if self.confirmada[lado]:
+                    self.ausente_consecutiva[lado] += 1
+                    if self.ausente_consecutiva[lado] >= self.FRAMES_AUSENTE_PARA_DESTRUIDA:
+                        self.destruida[lado] = True
+                        print(f"[torres] Princess tower enemiga {lado.upper()} destruida")
+
 
 # ---------- CONSTRUCCION DEL GAMESTATE ----------
 
@@ -255,6 +323,15 @@ def construir_game_state(frame, modelo_yolo, hud_config, plantillas):
 
 # ---------- LOGICA DE CARTAS BASICA ----------
 
+def hay_aliada_cerca(centro, estado: GameState, radio=RADIO_CERCANIA_ALIADA_HECHIZO) -> bool:
+    """Comprueba si alguna tropa aliada esta dentro de 'radio' del centro dado."""
+    x_centro, y_centro = centro
+    return any(
+        math.hypot(t.x_norm - x_centro, t.y_norm - y_centro) < radio
+        for t in estado.tropas_aliadas
+    )
+
+
 def encontrar_grupo_mas_numeroso(tropas, radio):
     """Busca el grupo de tropas mas numeroso dentro de un radio dado, y
     devuelve (cantidad, posicion_centro) del grupo. Si no hay tropas,
@@ -287,17 +364,17 @@ def val_giant(estado: GameState):
     valor = 0.1
 
     if not estado.tropas_enemigas:
-        valor += 0.2
+        valor += 0.1
 
     if estado.elixir > 8:
-        valor += 0.2
+        valor += 0.1
 
     if estado.tropas_aliadas:
-        valor += 0.2
+        valor += 0.1
 
     # +0.2 si hay mosqueteras o arqueras aliadas en mi lado de la arena
     aircounters_aliados = any(
-        t.tipo in AIR_COUNTERS and t.y_norm > MITAD_CAMPO_Y
+        t.tipo in AIR_COUNTERS and t.y_norm > 0.5
         for t in estado.tropas_aliadas
     )
     if aircounters_aliados:
@@ -307,9 +384,6 @@ def val_giant(estado: GameState):
 
 def val_knight(estado: GameState):
     valor = 0.1
-
-    if estado.tropas_enemigas:
-        valor += 0.2
 
     if estado.tropas_aliadas:
         valor += 0.2
@@ -322,13 +396,13 @@ def val_knight(estado: GameState):
     if tanques_en_mi_lado:
         valor += 0.2
     
-    # +0.2 si hay un antiaereo enemigo en mi lado de la arena
+    # +0.3 si hay un antiaereo enemigo en mi lado de la arena
     aircounters_en_mi_lado = any(
         t.tipo in (AIR_COUNTERS) and t.y_norm > MITAD_CAMPO_Y-0.1
         for t in estado.tropas_enemigas
     )
     if aircounters_en_mi_lado:
-        valor += 0.2
+        valor += 0.3
 
     return round(min(valor, 1.0), 2)
 
@@ -353,7 +427,7 @@ def val_musketeer(estado: GameState):
 
     # +0.2 si hay un tanque aliado en mi lado de la arena
     tanques_aliados = any(
-        t.tipo in (TANQUES | MINITANQUES) and t.y_norm > MITAD_CAMPO_Y
+        t.tipo in (TANQUES | MINITANQUES)
         for t in estado.tropas_aliadas
     )
     if tanques_aliados:
@@ -366,11 +440,14 @@ def val_arrows(estado: GameState):
 
     tropas_enemigas = [t for t in estado.tropas_enemigas if t.y_norm > 0.3]
 
-    # +0.4 si hay mas de 3 tropas enemigas agrupadas (cerca unas de otras) y hay cartas que mueren a flechas
+    # +0.4 si hay mas de 2 tropas enemigas agrupadas (cerca unas de otras) y hay cartas que mueren a flechas
     cantidad, _ = encontrar_grupo_mas_numeroso(tropas_enemigas, radio=0.15)
-    if cantidad > 3 and any(t.tipo in SWARMS_ENEMY for t in tropas_enemigas):
+    if cantidad > 2 and any(t.tipo in SWARMS_ENEMY for t in tropas_enemigas):
+        valor += 0.25
+    if cantidad > 4 and any(t.tipo in SWARMS_ENEMY for t in tropas_enemigas):
+        valor += 0.25
+    if cantidad > 6:
         valor += 0.4
-
     return round(min(valor, 1.0), 2)
 
 def val_fireball(estado: GameState):
@@ -381,28 +458,33 @@ def val_fireball(estado: GameState):
     # +0.4 si hay mas de 2 tropas enemigas agrupadas (cerca unas de otras) y hay tropas enemigas que mueren a fireball
     cantidad, _ = encontrar_grupo_mas_numeroso(tropas_enemigas, radio=0.1)
     if cantidad > 1 and any(t.tipo in TROPAS_OBJETIVO_FIREBALL for t in tropas_enemigas):
-        valor += 0.4
+        valor += 0.25
+    if cantidad > 2 and any(t.tipo in TROPAS_OBJETIVO_FIREBALL for t in tropas_enemigas):
+        valor += 0.25
 
     return round(min(valor, 1.0), 2)
 
 def val_minipekka(estado: GameState):
     valor = 0.1
 
+    if estado.elixir > 8:
+        valor += 0.1
+
     # +0.5 si hay un giant enemigo en mi lado de la arena
     giant_en_mi_lado = any(
-        t.tipo in TANQUES_ENEMY and t.y_norm > MITAD_CAMPO_Y
+        t.tipo in TANQUES_ENEMY and t.y_norm > 0.4
         for t in estado.tropas_enemigas
     )
     if giant_en_mi_lado:
         valor += 0.5
 
-    # +0.2 si hay mosqueteras o arqueras enemigos en mi lado de la arena
+    # +0.3 si hay mosqueteras o arqueras enemigos en mi lado de la arena
     aircounters_en_mi_lado = any(
         t.tipo in AIR_COUNTERS_ENEMY and t.y_norm > MITAD_CAMPO_Y
         for t in estado.tropas_enemigas
     )
     if aircounters_en_mi_lado:
-        valor += 0.2
+        valor += 0.3
 
     # +0.3 si hay minitanques enemigos en mi lado de la arena
     minitanques_en_mi_lado = any(
@@ -412,18 +494,29 @@ def val_minipekka(estado: GameState):
     if minitanques_en_mi_lado:
         valor += 0.3
 
-    # -0.2 si hay swarms enemigos en mi lado de la arena
+    # +0.2 si hay un tanque aliado en mi lado de la arena
+    tanques_aliados = any(
+        t.tipo in (TANQUES)
+        for t in estado.tropas_aliadas
+    )
+    if tanques_aliados:
+        valor += 0.2
+
+    # -0.4 si hay swarms enemigos en mi lado de la arena
     swarms_en_mi_lado = any(
         t.tipo in SWARMS_ENEMY and t.y_norm > MITAD_CAMPO_Y
         for t in estado.tropas_enemigas
     )
     if swarms_en_mi_lado:
-        valor -= 0.2
+        valor -= 0.4
     
     return round(min(valor, 1.0), 2)
 
 def val_minions(estado: GameState):
     valor = 0.1
+
+    if estado.elixir > 8:
+        valor += 0.1
 
     # +0.3 si hay un tanque enemigo en mi lado de la arena
     tanques_en_mi_lado = any(
@@ -434,7 +527,7 @@ def val_minions(estado: GameState):
         valor += 0.3
 
     if any(t.tipo in AIR_COUNTERS_ENEMY for t in estado.tropas_enemigas):
-        valor -= 0.2
+        valor -= 0.3
     
     # +0.2 si hay un tanque aliado en mi lado de la arena
     tanques_aliados = any(
@@ -468,7 +561,7 @@ def val_archers(estado: GameState):
 
     # +0.2 si hay un tanque aliado en mi lado de la arena
     tanques_aliados = any(
-        t.tipo in (TANQUES | MINITANQUES) and t.y_norm > MITAD_CAMPO_Y
+        t.tipo in (TANQUES | MINITANQUES)
         for t in estado.tropas_aliadas
     )
     if tanques_aliados:
@@ -481,20 +574,31 @@ def valor_esperar(estado: GameState):
 
     if estado.elixir > 8:
         valor = 0.1
+    elif estado.elixir > 9:
+        valor = 0.0
 
     return valor
 
 def calcular_posicion_objetivo_hechizo(nombre_carta: str, estado: GameState):
     """Devuelve la posicion (x_norm, y_norm) donde apuntar un hechizo:
-    el centro del grupo enemigo mas numeroso. Si no hay enemigos, apunta
-    a la torre enemiga mas debil visible (fallback razonable)."""
+    el centro del grupo enemigo mas numeroso. Si hay una tropa aliada
+    cerca del grupo, se tira sin offset (para no arriesgarse a fallar el
+    area y dañarla); si no hay aliados cerca, se aplica un pequeño offset
+    en y para compensar el movimiento de las tropas enemigas hacia mi
+    campo. Si no hay enemigos, apunta a una torre enemiga (fallback)."""
     tropas_enemigas = estado.tropas_enemigas
     radio = RADIO_AGRUPACION_HECHIZO.get(nombre_carta, 0.12)
 
     _, centro = encontrar_grupo_mas_numeroso(tropas_enemigas, radio)
     if centro is not None:
         x_centro, y_centro = centro
-        y_ajustado = max(0.0, min(1.0, y_centro + 0.05))  # evita salirse de 0.0-1.0
+
+        if hay_aliada_cerca(centro, estado):
+            y_ajustado = y_centro  # sin offset
+        else:
+            y_ajustado = y_centro + 0.07
+
+        y_ajustado = max(0.0, min(1.0, y_ajustado))
         return (x_centro, y_ajustado)
 
     # Fallback: si no hay tropas enemigas visibles, apunta a una torre enemiga
@@ -503,7 +607,7 @@ def calcular_posicion_objetivo_hechizo(nombre_carta: str, estado: GameState):
         torre = torres_enemigas[0]
         return (torre.x_norm, torre.y_norm)
 
-    return (0.5, 0.3)  # ultimo recurso: centro del lado enemigo
+    return (0.5, 0.3)
 
 # Diccionario que asocia cada carta con su funcion de valor
 FUNCIONES_DE_VALOR = {
@@ -553,52 +657,199 @@ def decidir_jugada(estado: GameState):
     return {"carta": mejor_carta, "valor": mejor_valor}
 
 
-def elegir_zona(estado: GameState, nombre_carta: str = None) -> str:
-    """Decide dinamicamente que zona usar, mirando si hay amenazas
-    enemigas invadiendo mi lado del campo y que tan cerca estan."""
-    tropas_enemigas_en_mi_lado = [
-        t for t in estado.tropas_enemigas if t.y_norm > 0.45
-    ]
-    soportes_atras = any(
-            t.tipo in (AIR_COUNTERS | MINITANQUES) and t.y_norm > 0.51
-            for t in estado.tropas_aliadas
-        )
-    cartas_atacando = any(
-            t.tipo in (AIR_COUNTERS | MINITANQUES | TANQUES) and t.y_norm < 0.5
-            for t in estado.tropas_aliadas
-        )
-    if not tropas_enemigas_en_mi_lado and cartas_atacando:
-        return "puente" 
-    elif nombre_carta in TANQUES | MINITANQUES and soportes_atras:
-        return "puente"
-    elif not tropas_enemigas_en_mi_lado:
-        return "detras_torre"
+# Límites del área donde se puede desplegar (en y_norm), según tu hud_config.json
+DEPLOY_Y_MIN = 0.48   # aprox. el puente
+DEPLOY_Y_MAX = 0.78   # justo antes de la zona de cartas
+
+PASO_REJILLA = 0.08   # cuanto mas pequeño, mas candidatos (mas preciso, mas lento)
+
+DEPLOY_Y_MIN_INVASION = 0.2  # mucho mas adelante, dentro del campo enemigo
+
+
+def generar_posiciones_candidatas(torres_destruidas=None):
+    torres_destruidas = torres_destruidas or {"izquierda": False, "derecha": False}
+    candidatas = []
+    x = 0.10
+    while x <= 0.90:
+        lado = "izquierda" if x < 0.5 else "derecha"
+        y_min = DEPLOY_Y_MIN_INVASION if torres_destruidas[lado] else DEPLOY_Y_MIN
+
+        y = y_min
+        while y <= DEPLOY_Y_MAX:
+            candidatas.append((round(x, 2), round(y, 2)))
+            y += PASO_REJILLA
+        x += PASO_REJILLA
+    return candidatas
+
+def tropa_aliada_mas_adelantada(estado: GameState):
+    """La tropa aliada con menor y_norm (mas cerca del puente/enemigo)."""
+    if not estado.tropas_aliadas:
+        return None
+    return min(estado.tropas_aliadas, key=lambda t: t.y_norm)
+
+
+def tropa_aliada_mas_atrasada(estado: GameState):
+    """La tropa aliada con mayor y_norm (mas cerca de mi torre)."""
+    if not estado.tropas_aliadas:
+        return None
+    return max(estado.tropas_aliadas, key=lambda t: t.y_norm)
+
+def tanque_o_minitanque_aliado_mas_atrasado(estado: GameState):
+    """La tropa aliada (solo tanque o minitanque) con mayor y_norm
+    (la mas cerca de mi torre). Devuelve None si no hay ninguna."""
+    candidatas = [t for t in estado.tropas_aliadas if t.tipo in (TANQUES | MINITANQUES)]
+    if not candidatas:
+        return None
+    return max(candidatas, key=lambda t: t.y_norm)
+
+def air_counter_aliado_mas_atrasado(estado: GameState):
+    """La tropa aliada (solo tanque o minitanque) con mayor y_norm
+    (la mas cerca de mi torre). Devuelve None si no hay ninguna."""
+    candidatas = [t for t in estado.tropas_aliadas if t.tipo in (AIR_COUNTERS | MINITANQUES)]
+    if not candidatas:
+        return None
+    return max(candidatas, key=lambda t: t.y_norm)
+
+
+def tanque_aliado_en_campo(estado: GameState):
+    return next((t for t in estado.tropas_aliadas if t.tipo in TANQUES), None)
+
+
+def tropa_enemiga_mas_adelantada_en_mi_lado(estado: GameState):
+    """La tropa enemiga mas invadida en mi lado (mayor y_norm)."""
+    candidatas = [t for t in estado.tropas_enemigas if t.y_norm > MITAD_CAMPO_Y]
+    if not candidatas:
+        return None
+    return max(candidatas, key=lambda t: t.y_norm)
+
+def tropas_aliadas_atacando(estado: GameState):
+    """Tropas aliadas que ya cruzaron al campo enemigo."""
+    return [t for t in estado.tropas_aliadas if t.y_norm < MITAD_CAMPO_Y]
+
+def puntuar_campo_vacio(pos, estado: GameState, nombre_carta=None) -> float:
+    if estado.tropas_enemigas or estado.tropas_aliadas:
+        return 0.0  # solo aplica si el campo esta completamente vacio
+
+    x, y = pos
+    distancia_centro = abs(x - 0.5)
+    distancia_atras = DEPLOY_Y_MAX - y  # 0 cuando y = DEPLOY_Y_MAX (lo mas atras posible)
+
+    return max(0.0, 1.0 - distancia_centro * 2) + max(0.0, 1.0 - distancia_atras * 3)
+
+
+def puntuar_tanque(pos, estado: GameState, nombre_carta=None) -> float:
+    if nombre_carta not in CARTAS_TANQUE:
+        return 0.0
+
+    # Si el campo esta completamente vacio, que decida puntuar_campo_vacio,
+    # no esta funcion (evita competir por una posicion "por defecto")
+    if not estado.tropas_enemigas and not estado.tropas_aliadas:
+        return 0.0
+
+    x, y = pos
+
+    amenaza_avanzada = any(
+        t.tipo in (AIR_COUNTERS_ENEMY | MINITANQUES_ENEMY) and t.y_norm > 0.50
+        for t in estado.tropas_enemigas
+    )
+    if amenaza_avanzada:
+        amenaza = tropa_enemiga_mas_adelantada_en_mi_lado(estado)
+        objetivo_x = amenaza.x_norm if amenaza else 0.5
+        distancia = math.hypot(x - objetivo_x, y - DEPLOY_Y_MIN)
+        return max(0.0, 1.0 - distancia * 3)
+
+    frontmost = air_counter_aliado_mas_atrasado(estado)
+    if frontmost is None:
+        objetivo_x, objetivo_y = 0.5, DEPLOY_Y_MAX  # sin tropas propias, detras (no en el puente)
+    elif frontmost.y_norm > 0.5:
+        objetivo_x = frontmost.x_norm
+        objetivo_y = max(DEPLOY_Y_MIN, frontmost.y_norm - OFFSET_DETRAS_TROPA)
     else:
-        return "frente_torre"
+        objetivo_x, objetivo_y = 0.5, DEPLOY_Y_MAX  # sin tropas propias, detras (no en el puente)
 
-    
-
-def elegir_carril(estado: GameState) -> float:
-    """Devuelve la coordenada x_norm del carril, priorizando el lado
-    donde este la amenaza mas avanzada; si no hay amenazas, usa un
-    carril por defecto."""
-    tropas_enemigas_en_mi_lado = [
-        t for t in estado.tropas_enemigas if t.y_norm > MITAD_CAMPO_Y
-    ]
-
-    if not tropas_enemigas_en_mi_lado:
-        return 0.25  # carril izquierdo por defecto al atacar
-
-    amenaza_mas_cercana = max(tropas_enemigas_en_mi_lado, key=lambda t: t.y_norm)
-    return amenaza_mas_cercana.x_norm  # despliega justo en el carril de la amenaza
+    distancia = math.hypot(x - objetivo_x, y - objetivo_y)
+    return max(0.0, 1.0 - distancia * 4)
 
 
-def calcular_posicion_despliegue(estado: GameState, nombre_carta: str = None):
-    zona = elegir_zona(estado, nombre_carta)
-    y_norm = ZONAS_Y[zona]
-    x_norm = elegir_carril(estado)
-    return (x_norm, y_norm)
+def puntuar_minitanque(pos, estado: GameState, nombre_carta=None) -> float:
+    if nombre_carta not in CARTAS_MINITANQUE:
+        return 0.0
+    if not estado.tropas_enemigas and not estado.tropas_aliadas:
+        return 0.0
+    x, y = pos
 
+    enemigo = tropa_enemiga_mas_adelantada_en_mi_lado(estado)
+    if enemigo is not None:
+        objetivo_x = enemigo.x_norm
+        objetivo_y = min(DEPLOY_Y_MAX, enemigo.y_norm + OFFSET_DETRAS_TROPA)
+        distancia = math.hypot(x - objetivo_x, y - objetivo_y)
+        return max(0.0, 1.0 - distancia * 3) * 2
+
+    peso_cercania = 0.5 if tropas_aliadas_atacando(estado) else 1.0
+    opciones = []
+    tanque = tanque_aliado_en_campo(estado)
+    if tanque is not None:
+        objetivo_y = min(DEPLOY_Y_MAX, tanque.y_norm + OFFSET_DETRAS_TROPA)
+        distancia = math.hypot(x - tanque.x_norm, y - objetivo_y)  # ahora usa x tambien
+        opciones.append(max(0.0, 1.0 - distancia * 4) * peso_cercania)
+        
+    frontmost = tropa_aliada_mas_adelantada(estado)
+
+    if frontmost is not None:
+        objetivo_y = max(DEPLOY_Y_MIN, frontmost.y_norm - OFFSET_DETRAS_TROPA)
+        distancia = math.hypot(x - frontmost.x_norm, y - objetivo_y)  # ahora usa x tambien
+        opciones.append(max(0.0, 1.0 - distancia * 4) * peso_cercania)
+
+    return max(opciones) if opciones else 0.0
+
+
+def puntuar_air_counter(pos, estado: GameState, nombre_carta=None) -> float:
+    if nombre_carta not in CARTAS_AIR_COUNTER:
+        return 0.0
+    if not estado.tropas_enemigas and not estado.tropas_aliadas:
+        return 0.0
+    x, y = pos
+    amenaza = tropa_enemiga_mas_adelantada_en_mi_lado(estado)
+
+    if amenaza is not None:
+        offset = PASO_REJILLA * 2  # "2x2 casillas"
+        # Hacia el centro del mapa: en x, acercarse a 0.5; en y, acercarse al puente
+        objetivo_x = amenaza.x_norm + offset if amenaza.x_norm < 0.5 else amenaza.x_norm - offset
+        objetivo_y = max(DEPLOY_Y_MIN, amenaza.y_norm + offset)
+        distancia = math.hypot(x - objetivo_x, y - objetivo_y)
+        return max(0.0, 1.0 - distancia * 4)
+
+    # Sin enemigos en mi campo: detras del resto de mis tropas
+    atras = tanque_o_minitanque_aliado_mas_atrasado(estado)
+    if atras is not None:
+        objetivo_x = atras.x_norm
+        objetivo_y = min(DEPLOY_Y_MAX, atras.y_norm + PASO_REJILLA)
+        distancia = math.hypot(x - objetivo_x, y - objetivo_y)
+        return max(0.0, 1.0 - distancia * 4)
+        #return max(0.0, 1.0 - abs(y - objetivo_y) * 4)
+
+    return 0.0
+
+FUNCIONES_POSICION = [
+    puntuar_campo_vacio,
+    puntuar_tanque,
+    puntuar_minitanque,
+    puntuar_air_counter,
+]
+
+
+def calcular_posicion_despliegue(estado: GameState, nombre_carta: str = None, torres_destruidas=None):
+    candidatas = generar_posiciones_candidatas(torres_destruidas)
+    mejor_posicion = None
+    mejor_puntuacion = float("-inf")
+
+    for pos in candidatas:
+        puntuacion = sum(funcion(pos, estado, nombre_carta) for funcion in FUNCIONES_POSICION)
+        if puntuacion > mejor_puntuacion:
+            mejor_puntuacion = puntuacion
+            mejor_posicion = pos
+
+    return mejor_posicion
 
 # ---------- BUCLE PRINCIPAL ----------
 
@@ -615,12 +866,19 @@ def main():
         print("Aviso: no hay plantillas de cartas en 'templates/', la mano saldra vacia.")
 
     sct = mss()
+    plantilla_rematch = None
+    if os.path.exists(TEMPLATE_REMATCH_PATH):
+        plantilla_rematch = cv2.imread(TEMPLATE_REMATCH_PATH)
+        print(f"Plantilla de 'Jugar de Nuevo' cargada desde: {TEMPLATE_REMATCH_PATH}")
+    else:
+        print(f"Aviso: no se encontro '{TEMPLATE_REMATCH_PATH}', el auto-rematch estara desactivado.")
     region = find_window_region(WINDOW_TITLE, exclude_substring=PREVIEW_WINDOW_TITLE) or FALLBACK_REGION
     print(f"Capturando region inicial: {region}")
 
     frame_count = 0
     prev_time = time.time()
     ultima_jugada_timestamp = 0
+    torre_tracker = TorreTracker()
 
     while True:
         if frame_count % REFRESH_WINDOW_EVERY_N_FRAMES == 0:
@@ -629,11 +887,25 @@ def main():
                 region = nueva
 
         frame = capturar_frame(sct, region)
+
+        # NUEVO: comprobar el boton de rematch cada N frames
+        if plantilla_rematch is not None and frame_count % REVISAR_REMATCH_CADA_N_FRAMES == 0:
+            encontrado, cx, cy, score = buscar_boton_rematch(frame, plantilla_rematch)
+            if encontrado:
+                x_absoluto = region["left"] + cx
+                y_absoluto = region["top"] + cy
+                print(f"[rematch] Boton detectado (score={score:.2f}), clic en ({x_absoluto}, {y_absoluto})")
+                pyautogui.click(x_absoluto, y_absoluto)
+                time.sleep(2)  # da tiempo a que cargue la siguiente partida
+                frame_count += 1
+                continue  # salta el resto de la iteracion (no tiene sentido jugar cartas en la pantalla de resultados)
+
         estado, resultados_yolo = construir_game_state(frame, modelo_yolo, hud_config, plantillas)
 
+        torre_tracker.actualizar(estado.tropas)
+
         ahora = time.time()
-        decision = None  # evita usar un valor obsoleto de la iteracion anterior
-        print(f"[debug] tiempo desde ultima jugada: {ahora - ultima_jugada_timestamp:.2f}s")
+        decision = None
         if ahora - ultima_jugada_timestamp > COOLDOWN_SEGUNDOS:
             decision = decidir_jugada(estado)
 
@@ -641,7 +913,7 @@ def main():
                 if decision["carta"] in HECHIZOS:
                     posicion = calcular_posicion_objetivo_hechizo(decision["carta"], estado)
                 else:
-                    posicion = calcular_posicion_despliegue(estado, decision["carta"])
+                    posicion = calcular_posicion_despliegue(estado, decision["carta"], torre_tracker.destruida)
 
                 jugado = jugar_carta(decision["carta"], estado.mano, hud_config, region, posicion)
                 if jugado:
