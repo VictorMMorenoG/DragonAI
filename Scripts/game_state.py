@@ -47,7 +47,7 @@ except ImportError:
 # ============ CONFIGURACION ============
 
 WINDOW_TITLE = "Clash Royale"
-MODEL_PATH = r"C:\DragonAI\runs\detect\train-9\weights\best.pt"
+MODEL_PATH = r"C:\DragonAI\runs\detect\train-10\weights\best.pt"
 HUD_CONFIG_PATH = "hud_config.json"
 TEMPLATES_DIR = "templates"
 
@@ -76,23 +76,37 @@ TORRES = {
     "princess_tower_player", "princess_tower_enemy",
 }
 
-SWARMS_ENEMY = {"minions_enemy", "archers_enemy", "goblins_enemy", "spear_goblins_enemy", "bat_enemy", "bomber_enemy", "electro_spirit_enemy", "fire_spirit_enemy"}
+SWARMS_ENEMY = {"goblins_enemy", "spear_goblins_enemy", "bat_enemy", "bomber_enemy", "larry_enemy"}
 
-TROPAS_OBJETIVO_FIREBALL = {"archers_enemy", "musketeer_enemy", "barbarian_enemy", "squeleton_dragon_enemy", "wizard_enemy", "witch_enemy"}
+TROPAS_OBJETIVO_FIREBALL = {"musketeer_enemy", "barbarian_enemy", "squeleton_dragon_enemy", "wizard_enemy", "witch_enemy", "three_musketeer_enemy"}
 
-AIR_COUNTERS_ENEMY = {"archers_enemy", "musketeer_enemy", "wizard_enemy", "baby_dragon_enemy", "flying_machine_enemy", "witch_enemy"}
+TROPAS_OBJETIVO_FLECHAS = {"minions_enemy", "archers_enemy", "bomber_enemy"}
 
-TANQUES_ENEMY = {"giant_enemy", "battle_ram_enemy", "hog_rider_enemy"}
+RANGE_TROOPS_ENEMY = {"archers_enemy", "musketeer_enemy", "wizard_enemy", "witch_enemy", "three_musketeer_enemy", "bomber_enemy"}
 
-MINITANQUES_ENEMY = {"knight_enemy", "minipekka_enemy", "goblin_brawler_enemy", "valkyrie_enemy", "megaminion_enemy", "pekka_enemy"}
+RANGE_FLY_ENEMY = {"baby_dragon_enemy", "flying_machine_enemy", "megaminion_enemy", "squeleton_dragon_enemy"}
+
+TANQUES_ENEMY = {"giant_enemy", "royal_giant_enemy"}
+
+BIG_TROOP_ENEMY = {"pekka_enemy"}
+
+WINCONS_ENEMY = {"battle_ram_enemy", "hog_rider_enemy", "piggie_enemy"}
+
+WINCONS_FLY_ENEMY = {"balloon_enemy", "megaminion_enemy"}
+
+MINITANQUES_ENEMY = {"knight_enemy", "minipekka_enemy", "goblin_brawler_enemy", "valkyrie_enemy", "pekka_enemy", "dark_prince_enemy", "prince_enemy", "royal_recruit_enemy", "barbarian_enemy"}
 
 ESTRUCUTAS_ENEMY = {"bomb_tower_enemy", "canon_enemy", "goblin_cage_enemy", "goblin_hut_enemy", "inferno_tower_enemy", "tombstone_enemy"}
 
+ESTRUCTURAS_OFFENSE_ENEMY = {"mortar_enemy"}
+
 TANQUES = {"giant_player"}
 
-MINITANQUES = {"knight_player", "minipekka_player"}
+MINITANQUES = {"knight_player", "minipekka_player", "prince_player", "dark_prince_player"}
 
-AIR_COUNTERS = {"archers_player", "musketeer_player"}
+AIR_COUNTERS = {"archers_player", "musketeer_player", "megaminion_player"}
+
+SPLASHERS = {"bomber_player"}
 
 HECHIZOS = {"arrows", "fireball"}
 
@@ -100,18 +114,27 @@ RADIO_AGRUPACION_HECHIZO = {
     "arrows": 0.15,
     "fireball": 0.10,
 }
+
 CARTAS_TANQUE = {"giant"}
-CARTAS_MINITANQUE = {"knight", "minipekka", "minions"}
-CARTAS_AIR_COUNTER = {"musketeer", "archers"}
+
+CARTAS_MINITANQUE = {"knight", "minipekka", "minions","prince", "dark_prince", "megaminion"}
+
+CARTAS_AIR_COUNTER = {"musketeer", "archers", "bomber"}
 
 OFFSET_DETRAS_TROPA = 0.08
 
 TEMPLATE_REMATCH_PATH = r"C:\DragonAI\templates\jugar_de_nuevo.png"
 UMBRAL_MATCH_REMATCH = 0.75
-REVISAR_REMATCH_CADA_N_FRAMES = 15  # no hace falta comprobarlo en cada frame
+REVISAR_REMATCH_CADA_N_FRAMES = 15
 
 RADIO_CERCANIA_ALIADA_HECHIZO = 0.1
 
+PESO_OBJETIVO_DEFECTO = 2.0
+PESO_COLATERAL = 0.5
+
+# Puntuacion minima para que merezca la pena lanzar, y escala para val_*
+SCORE_MINIMO_HECHIZO = {"fireball": 2.5, "arrows": 3.0}
+SCORE_ESCALA_HECHIZO = {"fireball": 6.0, "arrows": 6.0}
 # =========================================
 
 
@@ -200,15 +223,19 @@ def cargar_hud_config():
 
 
 def cargar_plantillas():
+    """Carga las plantillas agrupadas por carta: {nombre_carta: [imagenes]}.
+    Los archivos con doble guion bajo (ej. archers__evo.png) se tratan como
+    variantes de la carta que va antes del '__' (en este caso 'archers')."""
     plantillas = {}
     if not os.path.isdir(TEMPLATES_DIR):
         return plantillas
     for archivo in os.listdir(TEMPLATES_DIR):
         if archivo.lower().endswith((".png", ".jpg", ".jpeg")):
-            nombre = os.path.splitext(archivo)[0]
+            nombre_archivo = os.path.splitext(archivo)[0]
+            nombre_carta = nombre_archivo.split("__")[0]
             img = cv2.imread(os.path.join(TEMPLATES_DIR, archivo))
             if img is not None:
-                plantillas[nombre] = img
+                plantillas.setdefault(nombre_carta, []).append(img)
     return plantillas
 
 
@@ -234,13 +261,14 @@ def identificar_carta(slot_img, plantillas, umbral=UMBRAL_MATCH_CARTAS):
     if slot_img is None or slot_img.shape[0] < 5 or slot_img.shape[1] < 5 or not plantillas:
         return None, 0.0
     mejor_nombre, mejor_score = None, -1.0
-    for nombre, plantilla in plantillas.items():
-        plantilla_ajustada = cv2.resize(plantilla, (slot_img.shape[1], slot_img.shape[0]))
-        resultado = cv2.matchTemplate(slot_img, plantilla_ajustada, cv2.TM_CCOEFF_NORMED)
-        _, score, _, _ = cv2.minMaxLoc(resultado)
-        if score > mejor_score:
-            mejor_score = score
-            mejor_nombre = nombre
+    for nombre, lista_plantillas in plantillas.items():
+        for plantilla in lista_plantillas:
+            plantilla_ajustada = cv2.resize(plantilla, (slot_img.shape[1], slot_img.shape[0]))
+            resultado = cv2.matchTemplate(slot_img, plantilla_ajustada, cv2.TM_CCOEFF_NORMED)
+            _, score, _, _ = cv2.minMaxLoc(resultado)
+            if score > mejor_score:
+                mejor_score = score
+                mejor_nombre = nombre
     if mejor_score < umbral:
         return None, mejor_score
     return mejor_nombre, mejor_score
@@ -331,34 +359,59 @@ def hay_aliada_cerca(centro, estado: GameState, radio=RADIO_CERCANIA_ALIADA_HECH
         for t in estado.tropas_aliadas
     )
 
+# Que tropas justifican lanzar cada hechizo
+OBJETIVOS_HECHIZO = {
+    "fireball": TROPAS_OBJETIVO_FIREBALL,
+    "arrows": TROPAS_OBJETIVO_FLECHAS | SWARMS_ENEMY,
+}
 
-def encontrar_grupo_mas_numeroso(tropas, radio):
-    """Busca el grupo de tropas mas numeroso dentro de un radio dado, y
-    devuelve (cantidad, posicion_centro) del grupo. Si no hay tropas,
-    devuelve (0, None)."""
-    if not tropas:
-        return 0, None
+# Peso de cada tropa dentro del area. Objetivo prioritario = peso alto.
+PESO_OBJETIVO_HECHIZO = {
+    "fireball": {
+        "witch_enemy": 3.0,
+        "three_musketeer_enemy": 3.0,
+        "wizard_enemy": 2.5,
+        "musketeer_enemy": 2.5,
+        "squeleton_dragon_enemy": 2.0,
+        "barbarian_enemy": 1.5,
+    },
+    "arrows": {
+        "minions_enemy": 1.5,
+        "archers_enemy": 1.5,
+        "bomber_enemy": 1.5,
+        "larry_enemy": 0.5,
+        "bat_enemy": 1.0,
+    },
+}
 
-    mejor_cantidad = 0
-    mejor_centro = None
+def peso_tropa_hechizo(tropa, nombre_carta):
+    if tropa.tipo in OBJETIVOS_HECHIZO.get(nombre_carta, set()):
+        return PESO_OBJETIVO_HECHIZO.get(nombre_carta, {}).get(tropa.tipo, PESO_OBJETIVO_DEFECTO)
+    return PESO_COLATERAL
 
-    for t1 in tropas:
-        grupo = [t1]
-        for t2 in tropas:
-            if t2 is t1:
-                continue
-            distancia = math.hypot(t1.x_norm - t2.x_norm, t1.y_norm - t2.y_norm)
-            if distancia < radio:
-                grupo.append(t2)
 
-        if len(grupo) > mejor_cantidad:
-            mejor_cantidad = len(grupo)
-            # Centro del grupo = promedio de posiciones de sus tropas
-            centro_x = sum(t.x_norm for t in grupo) / len(grupo)
-            centro_y = sum(t.y_norm for t in grupo) / len(grupo)
-            mejor_centro = (round(centro_x, 3), round(centro_y, 3))
+def mejor_objetivo_hechizo(nombre_carta, estado: GameState):
+    """Devuelve (puntuacion, centro) del mejor punto donde lanzar el hechizo.
+    Solo se consideran como ancla las tropas objetivo del hechizo.
+    Si no hay ninguna, devuelve (0.0, None)."""
+    objetivos = OBJETIVOS_HECHIZO.get(nombre_carta, set())
+    radio = RADIO_AGRUPACION_HECHIZO.get(nombre_carta, 0.12)
+    tropas = [t for t in estado.tropas_enemigas if t.y_norm > 0.3]
 
-    return mejor_cantidad, mejor_centro
+    mejor_score, mejor_centro = 0.0, None
+    for ancla in tropas:
+        if ancla.tipo not in objetivos:
+            continue
+        grupo = [
+            t for t in tropas
+            if math.hypot(t.x_norm - ancla.x_norm, t.y_norm - ancla.y_norm) < radio
+        ]  # incluye a la propia ancla (distancia 0)
+        score = sum(peso_tropa_hechizo(t, nombre_carta) for t in grupo)
+        if score > mejor_score:
+            mejor_score = score
+            mejor_centro = (ancla.x_norm, ancla.y_norm)
+
+    return round(mejor_score, 2), mejor_centro
 
 def val_giant(estado: GameState):
     valor = 0.1
@@ -374,7 +427,7 @@ def val_giant(estado: GameState):
 
     # +0.2 si hay mosqueteras o arqueras aliadas en mi lado de la arena
     aircounters_aliados = any(
-        t.tipo in AIR_COUNTERS and t.y_norm > 0.5
+        t.tipo in RANGE_TROOPS_ENEMY and t.y_norm > 0.5
         for t in estado.tropas_aliadas
     )
     if aircounters_aliados:
@@ -398,7 +451,7 @@ def val_knight(estado: GameState):
     
     # +0.3 si hay un antiaereo enemigo en mi lado de la arena
     aircounters_en_mi_lado = any(
-        t.tipo in (AIR_COUNTERS) and t.y_norm > MITAD_CAMPO_Y-0.1
+        t.tipo in (RANGE_TROOPS_ENEMY) and t.y_norm > MITAD_CAMPO_Y-0.1
         for t in estado.tropas_enemigas
     )
     if aircounters_en_mi_lado:
@@ -435,34 +488,17 @@ def val_musketeer(estado: GameState):
     
     return round(min(valor, 1.0), 2)
 
+def val_hechizo(nombre_carta, estado: GameState):
+    score, _ = mejor_objetivo_hechizo(nombre_carta, estado)
+    if score < SCORE_MINIMO_HECHIZO[nombre_carta]:
+        return 0.0
+    return round(min(score / SCORE_ESCALA_HECHIZO[nombre_carta], 1.0), 2)
+
 def val_arrows(estado: GameState):
-    valor = 0.0
-
-    tropas_enemigas = [t for t in estado.tropas_enemigas if t.y_norm > 0.3]
-
-    # +0.4 si hay mas de 2 tropas enemigas agrupadas (cerca unas de otras) y hay cartas que mueren a flechas
-    cantidad, _ = encontrar_grupo_mas_numeroso(tropas_enemigas, radio=0.15)
-    if cantidad > 2 and any(t.tipo in SWARMS_ENEMY for t in tropas_enemigas):
-        valor += 0.25
-    if cantidad > 4 and any(t.tipo in SWARMS_ENEMY for t in tropas_enemigas):
-        valor += 0.25
-    if cantidad > 6:
-        valor += 0.4
-    return round(min(valor, 1.0), 2)
+    return val_hechizo("arrows", estado)
 
 def val_fireball(estado: GameState):
-    valor = 0.0
-
-    tropas_enemigas = [t for t in estado.tropas_enemigas if t.y_norm > 0.3]
-
-    # +0.4 si hay mas de 2 tropas enemigas agrupadas (cerca unas de otras) y hay tropas enemigas que mueren a fireball
-    cantidad, _ = encontrar_grupo_mas_numeroso(tropas_enemigas, radio=0.1)
-    if cantidad > 1 and any(t.tipo in TROPAS_OBJETIVO_FIREBALL for t in tropas_enemigas):
-        valor += 0.25
-    if cantidad > 2 and any(t.tipo in TROPAS_OBJETIVO_FIREBALL for t in tropas_enemigas):
-        valor += 0.25
-
-    return round(min(valor, 1.0), 2)
+    return val_hechizo("fireball", estado)
 
 def val_minipekka(estado: GameState):
     valor = 0.1
@@ -480,7 +516,7 @@ def val_minipekka(estado: GameState):
 
     # +0.3 si hay mosqueteras o arqueras enemigos en mi lado de la arena
     aircounters_en_mi_lado = any(
-        t.tipo in AIR_COUNTERS_ENEMY and t.y_norm > MITAD_CAMPO_Y
+        t.tipo in RANGE_TROOPS_ENEMY and t.y_norm > MITAD_CAMPO_Y
         for t in estado.tropas_enemigas
     )
     if aircounters_en_mi_lado:
@@ -526,7 +562,7 @@ def val_minions(estado: GameState):
     if tanques_en_mi_lado:
         valor += 0.3
 
-    if any(t.tipo in AIR_COUNTERS_ENEMY for t in estado.tropas_enemigas):
+    if any(t.tipo in RANGE_TROOPS_ENEMY for t in estado.tropas_enemigas):
         valor -= 0.3
     
     # +0.2 si hay un tanque aliado en mi lado de la arena
@@ -569,44 +605,189 @@ def val_archers(estado: GameState):
 
     return round(min(valor, 1.0), 2)
 
-def valor_esperar(estado: GameState):
-    valor = 0.3
+def val_bomber(estado: GameState):
+    valor = 0.1
+
+    # +0.1 si hay un tanque enemigo en mi lado de la arena
+    tanques_en_mi_lado = any(
+        t.tipo in (TANQUES_ENEMY | MINITANQUES_ENEMY) and t.y_norm > MITAD_CAMPO_Y
+        for t in estado.tropas_enemigas
+    )
+    if tanques_en_mi_lado:
+        valor += 0.1
+
+    # +0.4 si hay swarms enemigos en mi lado de la arena
+    swarms_en_mi_lado = any(
+        t.tipo in SWARMS_ENEMY and t.y_norm > 0.5
+        for t in estado.tropas_enemigas
+    )
+    if swarms_en_mi_lado:
+        valor += 0.4
+
+    swarms_en_campo = any(
+        t.tipo in SWARMS_ENEMY
+        for t in estado.tropas_enemigas
+    )
+    if swarms_en_mi_lado:
+        valor += 0.2
+    
+    # +0.2 si hay un tanque aliado en mi lado de la arena
+    tanques_aliados = any(
+        t.tipo in (TANQUES | MINITANQUES)
+        for t in estado.tropas_aliadas
+    )
+    if tanques_aliados:
+        valor += 0.2
+
+    return round(min(valor, 1.0), 2)
+
+
+def val_prince(estado: GameState):
+    valor = 0.2
 
     if estado.elixir > 8:
-        valor = 0.1
-    elif estado.elixir > 9:
+        valor += 0.1
+
+    # +0.5 si hay un giant enemigo en mi lado de la arena
+    giant_en_mi_lado = any(
+        t.tipo in TANQUES_ENEMY and t.y_norm > 0.4
+        for t in estado.tropas_enemigas
+    )
+    if giant_en_mi_lado:
+        valor += 0.5
+
+    
+
+    # +0.3 si hay mosqueteras o arqueras enemigos en mi lado de la arena
+    aircounters_en_mi_lado = any(
+        t.tipo in RANGE_TROOPS_ENEMY and t.y_norm > MITAD_CAMPO_Y
+        for t in estado.tropas_enemigas
+    )
+    if aircounters_en_mi_lado:
+        valor += 0.3
+
+    # +0.3 si hay minitanques enemigos en mi lado de la arena
+    minitanques_en_mi_lado = any(
+        t.tipo in MINITANQUES_ENEMY and t.y_norm > MITAD_CAMPO_Y
+        for t in estado.tropas_enemigas
+    )
+    if minitanques_en_mi_lado:
+        valor += 0.3
+
+    # +0.3 si hay un tanque aliado
+    tanques_aliados = any(
+        t.tipo in (TANQUES)
+        for t in estado.tropas_aliadas
+    )
+    if tanques_aliados:
+        valor += 0.3
+    
+
+    # -0.4 si hay swarms enemigos en mi lado de la arena
+    swarms_en_mi_lado = any(
+        t.tipo in SWARMS_ENEMY and t.y_norm > MITAD_CAMPO_Y
+        for t in estado.tropas_enemigas
+    )
+    if swarms_en_mi_lado:
+        valor -= 0.3
+
+    # -0.2 si hay swarms enemigos
+    swarms_en_campo = any(
+        t.tipo in SWARMS_ENEMY
+        for t in estado.tropas_enemigas
+    )
+    if swarms_en_campo:
+        valor -= 0.2
+    
+    return round(min(valor, 1.0), 2)
+
+def val_megaminion(estado: GameState):
+    valor = 0.1
+
+    if estado.elixir > 8:
+        valor += 0.1
+
+    # +0.3 si hay un tanque enemigo en mi lado de la arena
+    tanques_en_mi_lado = any(
+        t.tipo in (TANQUES_ENEMY | MINITANQUES_ENEMY) and t.y_norm > MITAD_CAMPO_Y
+        for t in estado.tropas_enemigas
+    )
+    if tanques_en_mi_lado:
+        valor += 0.3
+
+    if any(t.tipo in RANGE_TROOPS_ENEMY for t in estado.tropas_enemigas):
+        valor -= 0.4
+    
+    # +0.4 si hay un tanque aliado en mi lado de la arena
+    tanques_aliados = any(
+        t.tipo in (TANQUES | MINITANQUES) and t.y_norm > MITAD_CAMPO_Y
+        for t in estado.tropas_aliadas
+    )
+    if tanques_aliados:
+        valor += 0.2
+    
+    return round(min(valor, 1.0), 2)
+
+def val_dark_prince(estado: GameState):
+    valor = 0.1
+
+    if estado.tropas_aliadas:
+        valor += 0.2
+
+    # +0.2 si hay un tanque enemigo en mi lado de la arena
+    tanques_en_mi_lado = any(
+        t.tipo in (TANQUES_ENEMY | MINITANQUES_ENEMY) and t.y_norm > MITAD_CAMPO_Y
+        for t in estado.tropas_enemigas
+    )
+    if tanques_en_mi_lado:
+        valor += 0.2
+    
+    # +0.3 si hay un antiaereo enemigo en mi lado de la arena
+    aircounters_en_mi_lado = any(
+        t.tipo in (RANGE_TROOPS_ENEMY) and t.y_norm > MITAD_CAMPO_Y-0.1
+        for t in estado.tropas_enemigas
+    )
+    if aircounters_en_mi_lado:
+        valor += 0.3
+
+    # +0.2 si hay minitanques enemigos en mi lado de la arena
+    minitanques_en_mi_lado = any(
+        t.tipo in MINITANQUES_ENEMY and t.y_norm > MITAD_CAMPO_Y
+        for t in estado.tropas_enemigas
+    )
+    if minitanques_en_mi_lado:
+        valor += 0.2
+
+    return round(min(valor, 1.0), 2)
+
+
+def valor_esperar(estado: GameState):
+    valor = 0.5
+
+    if estado.elixir > 9:
         valor = 0.0
+    elif estado.elixir > 8:
+        valor = 0.1
+    elif estado.elixir > 5:
+        valor = 0.3
+    elif estado.elixir > 4:
+        valor = 0.4
 
     return valor
 
 def calcular_posicion_objetivo_hechizo(nombre_carta: str, estado: GameState):
-    """Devuelve la posicion (x_norm, y_norm) donde apuntar un hechizo:
-    el centro del grupo enemigo mas numeroso. Si hay una tropa aliada
-    cerca del grupo, se tira sin offset (para no arriesgarse a fallar el
-    area y dañarla); si no hay aliados cerca, se aplica un pequeño offset
-    en y para compensar el movimiento de las tropas enemigas hacia mi
-    campo. Si no hay enemigos, apunta a una torre enemiga (fallback)."""
-    tropas_enemigas = estado.tropas_enemigas
-    radio = RADIO_AGRUPACION_HECHIZO.get(nombre_carta, 0.12)
-
-    _, centro = encontrar_grupo_mas_numeroso(tropas_enemigas, radio)
+    _, centro = mejor_objetivo_hechizo(nombre_carta, estado)
     if centro is not None:
         x_centro, y_centro = centro
 
-        if hay_aliada_cerca(centro, estado):
-            y_ajustado = y_centro  # sin offset
-        else:
-            y_ajustado = y_centro + 0.07
+        # Sin aliadas cerca, compensamos el avance de la tropa hacia mi campo
+        y_ajustado = y_centro if hay_aliada_cerca(centro, estado) else y_centro + 0.07
+        return (x_centro, max(0.0, min(1.0, y_ajustado)))
 
-        y_ajustado = max(0.0, min(1.0, y_ajustado))
-        return (x_centro, y_ajustado)
-
-    # Fallback: si no hay tropas enemigas visibles, apunta a una torre enemiga
+    # Fallback: torre enemiga
     torres_enemigas = [t for t in estado.tropas if t.tipo in TORRES and t.tipo.endswith("_enemy")]
     if torres_enemigas:
-        torre = torres_enemigas[0]
-        return (torre.x_norm, torre.y_norm)
-
+        return (torres_enemigas[0].x_norm, torres_enemigas[0].y_norm)
     return (0.5, 0.3)
 
 # Diccionario que asocia cada carta con su funcion de valor
@@ -618,7 +799,11 @@ FUNCIONES_DE_VALOR = {
     "fireball": val_fireball,
     "minipekka": val_minipekka,
     "minions": val_minions,
-    "archers": val_archers
+    "archers": val_archers,
+    "bomber": val_bomber,
+    "prince": val_prince,
+    "megaminion": val_megaminion,
+    "dark_prince": val_dark_prince
 }
 
 COSTES_CARTAS = {
@@ -630,6 +815,10 @@ COSTES_CARTAS = {
     "minipekka": 4,
     "minions": 3,
     "archers": 3,
+    "bomber": 2,
+    "prince": 5,
+    "megaminion": 3,
+    "dark_prince": 4
 }
 
 def decidir_jugada(estado: GameState):
@@ -749,7 +938,7 @@ def puntuar_tanque(pos, estado: GameState, nombre_carta=None) -> float:
     x, y = pos
 
     amenaza_avanzada = any(
-        t.tipo in (AIR_COUNTERS_ENEMY | MINITANQUES_ENEMY) and t.y_norm > 0.50
+        t.tipo in (RANGE_TROOPS_ENEMY | MINITANQUES_ENEMY) and t.y_norm > 0.50
         for t in estado.tropas_enemigas
     )
     if amenaza_avanzada:
