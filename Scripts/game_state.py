@@ -84,7 +84,7 @@ TROPAS_OBJETIVO_FLECHAS = {"minions_enemy", "archers_enemy", "bomber_enemy"}
 
 RANGE_TROOPS_ENEMY = {"archers_enemy", "musketeer_enemy", "wizard_enemy", "witch_enemy", "three_musketeer_enemy", "bomber_enemy"}
 
-RANGE_FLY_ENEMY = {"baby_dragon_enemy", "flying_machine_enemy", "megaminion_enemy", "squeleton_dragon_enemy"}
+RANGE_FLY_ENEMY = {"baby_dragon_enemy", "flying_machine_enemy", "megaminion_enemy", "squeleton_dragon_enemy", "minions_enemy"}
 
 TANQUES_ENEMY = {"giant_enemy", "royal_giant_enemy"}
 
@@ -127,7 +127,9 @@ TEMPLATE_REMATCH_PATH = r"C:\DragonAI\templates\jugar_de_nuevo.png"
 UMBRAL_MATCH_REMATCH = 0.75
 REVISAR_REMATCH_CADA_N_FRAMES = 15
 
-RADIO_CERCANIA_ALIADA_HECHIZO = 0.1
+COOLDOWN_INICIO_PARTIDA = 5
+
+RADIO_CERCANIA_ALIADA_HECHIZO = 0.11
 
 PESO_OBJETIVO_DEFECTO = 2.0
 PESO_COLATERAL = 0.5
@@ -359,6 +361,28 @@ def hay_aliada_cerca(centro, estado: GameState, radio=RADIO_CERCANIA_ALIADA_HECH
         for t in estado.tropas_aliadas
     )
 
+def ventaja_tropas(estado: GameState) -> float:
+    """Devuelve de 0 a 1 quien tiene mas tropas en campo (sin torres).
+    0.0 = solo tiene tropas el rival, 0.5 = igualdad, 1.0 = solo tengo yo.
+    Si no hay ninguna tropa en campo, devuelve 0.5 (neutral)."""
+    mias = len(estado.tropas_aliadas)
+    rivales = len(estado.tropas_enemigas)
+    total = mias + rivales
+
+    if total == 0:
+        return 0.5
+
+    return round(mias / total, 2)
+
+def hay_en_mi_lado(tropas, tipos, y_min=MITAD_CAMPO_Y):
+    """True si alguna tropa de 'tipos' esta en mi lado (y_norm > y_min)."""
+    return any(t.tipo in tipos and t.y_norm > y_min for t in tropas)
+
+
+def hay_en_campo(tropas, tipos):
+    """True si hay alguna tropa de 'tipos' en cualquier parte."""
+    return any(t.tipo in tipos for t in tropas)
+
 # Que tropas justifican lanzar cada hechizo
 OBJETIVOS_HECHIZO = {
     "fireball": TROPAS_OBJETIVO_FIREBALL,
@@ -368,17 +392,19 @@ OBJETIVOS_HECHIZO = {
 # Peso de cada tropa dentro del area. Objetivo prioritario = peso alto.
 PESO_OBJETIVO_HECHIZO = {
     "fireball": {
-        "witch_enemy": 3.0,
-        "three_musketeer_enemy": 3.0,
+        "witch_enemy": 2.5,
+        "three_musketeer_enemy": 2.5,
         "wizard_enemy": 2.5,
-        "musketeer_enemy": 2.5,
-        "squeleton_dragon_enemy": 2.0,
-        "barbarian_enemy": 1.5,
+        "musketeer_enemy": 2,
+        "squeleton_dragon_enemy": 1.5,
+        "barbarian_enemy": 1,
     },
     "arrows": {
         "minions_enemy": 1.5,
         "archers_enemy": 1.5,
         "bomber_enemy": 1.5,
+        "goblins_enemy": 1,
+        "spear_goblins_enemy": 1,
         "larry_enemy": 0.5,
         "bat_enemy": 1.0,
     },
@@ -389,51 +415,94 @@ def peso_tropa_hechizo(tropa, nombre_carta):
         return PESO_OBJETIVO_HECHIZO.get(nombre_carta, {}).get(tropa.tipo, PESO_OBJETIVO_DEFECTO)
     return PESO_COLATERAL
 
+DISTANCIA_MINIMA_KING_TOWER = 0.2
+OFFSET_Y_HECHIZO = 0.08
+
+
+def punto_lanzamiento_hechizo(centro, estado: GameState):
+    """Punto real donde caeria el hechizo: sin offset si hay aliadas
+    cerca (para no fallar el area), con offset si no las hay."""
+    x, y = centro
+    if not hay_aliada_cerca(centro, estado):
+        y += OFFSET_Y_HECHIZO
+    return (x, max(0.0, min(1.0, y)))
+
+
+def demasiado_cerca_king_tower(punto, estado: GameState) -> bool:
+    """True si el punto esta a menos de DISTANCIA_MINIMA_KING_TOWER
+    de la king tower enemiga. Si no se ve la torre, no restringe."""
+    return any(
+        math.hypot(punto[0] - t.x_norm, punto[1] - t.y_norm) < DISTANCIA_MINIMA_KING_TOWER
+        for t in estado.tropas if t.tipo == "king_tower_enemy"
+    )
+
 
 def mejor_objetivo_hechizo(nombre_carta, estado: GameState):
-    """Devuelve (puntuacion, centro) del mejor punto donde lanzar el hechizo.
-    Solo se consideran como ancla las tropas objetivo del hechizo.
-    Si no hay ninguna, devuelve (0.0, None)."""
+    """Devuelve (puntuacion, punto_lanzamiento). Solo las tropas objetivo
+    pueden ser ancla, y se descartan los puntos cerca de la king tower."""
     objetivos = OBJETIVOS_HECHIZO.get(nombre_carta, set())
     radio = RADIO_AGRUPACION_HECHIZO.get(nombre_carta, 0.12)
-    tropas = [t for t in estado.tropas_enemigas if t.y_norm > 0.3]
+    tropas = estado.tropas_enemigas  # ya sin filtro de y: todo el campo
 
-    mejor_score, mejor_centro = 0.0, None
+    mejor_score, mejor_punto = 0.0, None
     for ancla in tropas:
         if ancla.tipo not in objetivos:
             continue
+
+        centro = (ancla.x_norm, ancla.y_norm)
+        punto = punto_lanzamiento_hechizo(centro, estado)
+        if demasiado_cerca_king_tower(punto, estado):
+            continue
+
         grupo = [
             t for t in tropas
             if math.hypot(t.x_norm - ancla.x_norm, t.y_norm - ancla.y_norm) < radio
-        ]  # incluye a la propia ancla (distancia 0)
+        ]
         score = sum(peso_tropa_hechizo(t, nombre_carta) for t in grupo)
         if score > mejor_score:
             mejor_score = score
-            mejor_centro = (ancla.x_norm, ancla.y_norm)
+            mejor_punto = punto
 
-    return round(mejor_score, 2), mejor_centro
+    return round(mejor_score, 2), mejor_punto
 
 def val_giant(estado: GameState):
-    valor = 0.1
-
-    if not estado.tropas_enemigas:
-        valor += 0.1
+    valor = 0.0
 
     if estado.elixir > 8:
-        valor += 0.1
-
-    if estado.tropas_aliadas:
-        valor += 0.1
-
-    # +0.2 si hay mosqueteras o arqueras aliadas en mi lado de la arena
-    aircounters_aliados = any(
-        t.tipo in RANGE_TROOPS_ENEMY and t.y_norm > 0.5
-        for t in estado.tropas_aliadas
-    )
-    if aircounters_aliados:
         valor += 0.2
-    
-    return round(min(valor, 1.0), 2)
+
+    # Ventaja numerica: +0.1 si voy ganando, -0.1 si voy perdiendo
+    ventaja = ventaja_tropas(estado)
+    if ventaja > 0.5:
+        valor += 0.1
+    elif ventaja < 0.5:
+        valor -= 0.1
+
+    # +0.1 si tengo antiaereos aliados en mi lado
+    if hay_en_mi_lado(estado.tropas_aliadas, AIR_COUNTERS):
+        valor += 0.1
+
+    # +0.1 si tengo minitanques aliados en mi lado
+    if hay_en_mi_lado(estado.tropas_aliadas, MINITANQUES):
+        valor += 0.1
+
+    # +0.2 si tengo un principe aliado en mi lado
+    if hay_en_mi_lado(estado.tropas_aliadas, {"prince_player"}):
+        valor += 0.2
+
+    # -0.2 si hay minitanques enemigos en mi lado
+    if hay_en_mi_lado(estado.tropas_enemigas, MINITANQUES_ENEMY):
+        valor -= 0.2
+
+    # -0.2 si hay winconditions enemigos en mi lado
+    if hay_en_mi_lado(estado.tropas_enemigas, WINCONS_ENEMY):
+        valor -= 0.2
+
+    # -0.2 si hay pekkas enemigos en mi lado
+    if hay_en_campo(estado.tropas_enemigas, BIG_TROOP_ENEMY):
+        valor -= 0.2
+
+    return round(max(0.0, min(valor, 1.0)), 2)
 
 def val_knight(estado: GameState):
     valor = 0.1
@@ -488,11 +557,14 @@ def val_musketeer(estado: GameState):
     
     return round(min(valor, 1.0), 2)
 
+VALOR_MAXIMO_HECHIZO = {"fireball": 0.7, "arrows": 0.6}
+
 def val_hechizo(nombre_carta, estado: GameState):
     score, _ = mejor_objetivo_hechizo(nombre_carta, estado)
     if score < SCORE_MINIMO_HECHIZO[nombre_carta]:
         return 0.0
-    return round(min(score / SCORE_ESCALA_HECHIZO[nombre_carta], 1.0), 2)
+    valor = min(score / SCORE_ESCALA_HECHIZO[nombre_carta], 1.0)
+    return round(valor * VALOR_MAXIMO_HECHIZO[nombre_carta], 2)
 
 def val_arrows(estado: GameState):
     return val_hechizo("arrows", estado)
@@ -577,218 +649,229 @@ def val_minions(estado: GameState):
     return round(min(valor, 1.0), 2)
 
 def val_archers(estado: GameState):
-    valor = 0.2
+    valor = 0.1
 
-    # +0.2 si hay un tanque enemigo en mi lado de la arena
-    tanques_en_mi_lado = any(
-        t.tipo in (TANQUES_ENEMY | MINITANQUES_ENEMY) and t.y_norm > MITAD_CAMPO_Y
-        for t in estado.tropas_enemigas
-    )
-    if tanques_en_mi_lado:
+    # +0.1 si hay tanques enemigos en mi lado
+    if hay_en_mi_lado(estado.tropas_enemigas, TANQUES_ENEMY):
+        valor += 0.1
+
+    # +0.2 si hay minitanques enemigos en mi lado
+    if hay_en_mi_lado(estado.tropas_enemigas, MINITANQUES_ENEMY):
         valor += 0.2
 
-    # +0.2 si hay swarms enemigos en mi lado de la arena
-    swarms_en_mi_lado = any(
-        t.tipo in SWARMS_ENEMY and t.y_norm > 0.5
-        for t in estado.tropas_enemigas
-    )
-    if swarms_en_mi_lado:
-        valor += 0.2
+    # +0.1 si hay swarms enemigos en mi lado
+    if hay_en_mi_lado(estado.tropas_enemigas, SWARMS_ENEMY):
+        valor += 0.1
 
-    # +0.2 si hay un tanque aliado en mi lado de la arena
-    tanques_aliados = any(
-        t.tipo in (TANQUES | MINITANQUES)
-        for t in estado.tropas_aliadas
-    )
-    if tanques_aliados:
+    # +0.1 si hay tanques aliados en mi lado
+    if hay_en_mi_lado(estado.tropas_aliadas, TANQUES):
+        valor += 0.1
+    
+    # +0.1 si hay wincons enemigos en mi lado
+    if hay_en_mi_lado(estado.tropas_enemigas, WINCONS_ENEMY):
+        valor += 0.1
+    
+    # -0.2 si hay un mago enemigo en campo
+    if hay_en_campo(estado.tropas_aliadas, {"wizard_enemy"}):
+        valor -= 0.2
+
+    # +0.3 si hay wincons voladoras enemigos en mi lado
+    if hay_en_mi_lado(estado.tropas_enemigas, WINCONS_FLY_ENEMY):
+        valor += 0.3
+
+    # +0.1 si hay wincons voladoras enemigos en el campo
+    if hay_en_campo(estado.tropas_enemigas, RANGE_FLY_ENEMY):
+        valor += 0.1
+
+    # +0.2 si hay pekkas enemigos en mi lado
+    if hay_en_campo(estado.tropas_enemigas, BIG_TROOP_ENEMY):
         valor += 0.2
+    
 
     return round(min(valor, 1.0), 2)
+
 
 def val_bomber(estado: GameState):
     valor = 0.1
 
-    # +0.1 si hay un tanque enemigo en mi lado de la arena
-    tanques_en_mi_lado = any(
-        t.tipo in (TANQUES_ENEMY | MINITANQUES_ENEMY) and t.y_norm > MITAD_CAMPO_Y
-        for t in estado.tropas_enemigas
-    )
-    if tanques_en_mi_lado:
-        valor += 0.1
+    # +0.2 si hay swarms enemigos en mi lado
+    if hay_en_mi_lado(estado.tropas_enemigas, SWARMS_ENEMY):
+        valor += 0.2
 
-    # +0.4 si hay swarms enemigos en mi lado de la arena
-    swarms_en_mi_lado = any(
-        t.tipo in SWARMS_ENEMY and t.y_norm > 0.5
-        for t in estado.tropas_enemigas
-    )
-    if swarms_en_mi_lado:
-        valor += 0.4
-
-    swarms_en_campo = any(
-        t.tipo in SWARMS_ENEMY
-        for t in estado.tropas_enemigas
-    )
-    if swarms_en_mi_lado:
+    # +0.2 si hay swarms enemigos en el campo
+    if hay_en_campo(estado.tropas_enemigas, SWARMS_ENEMY):
         valor += 0.2
     
-    # +0.2 si hay un tanque aliado en mi lado de la arena
-    tanques_aliados = any(
-        t.tipo in (TANQUES | MINITANQUES)
-        for t in estado.tropas_aliadas
-    )
-    if tanques_aliados:
+    # +0.1 si hay tanques aliados en mi lado
+    if hay_en_mi_lado(estado.tropas_aliadas, TANQUES):
+        valor += 0.1
+    
+    # +0.1 si hay wincons enemigos en mi lado
+    if hay_en_mi_lado(estado.tropas_enemigas, WINCONS_ENEMY):
+        valor += 0.1
+
+    # -0.1 si hay tropas voladoras enemigos en el campo
+    if hay_en_campo(estado.tropas_enemigas, RANGE_FLY_ENEMY):
+        valor -= 0.1
+
+    # +0.2 si hay pekkas enemigos en mi lado
+    if hay_en_campo(estado.tropas_enemigas, BIG_TROOP_ENEMY):
         valor += 0.2
+
+    # +0.1 si hay minitanques enemigos en mi lado
+    if hay_en_mi_lado(estado.tropas_enemigas, MINITANQUES_ENEMY):
+        valor += 0.1
 
     return round(min(valor, 1.0), 2)
 
 
 def val_prince(estado: GameState):
-    valor = 0.2
+    valor = 0.1
 
-    if estado.elixir > 8:
-        valor += 0.1
-
-    # +0.5 si hay un giant enemigo en mi lado de la arena
-    giant_en_mi_lado = any(
-        t.tipo in TANQUES_ENEMY and t.y_norm > 0.4
-        for t in estado.tropas_enemigas
-    )
-    if giant_en_mi_lado:
-        valor += 0.5
-
-    
-
-    # +0.3 si hay mosqueteras o arqueras enemigos en mi lado de la arena
-    aircounters_en_mi_lado = any(
-        t.tipo in RANGE_TROOPS_ENEMY and t.y_norm > MITAD_CAMPO_Y
-        for t in estado.tropas_enemigas
-    )
-    if aircounters_en_mi_lado:
+    # +0.3 si hay tanques enemigos en mi lado
+    if hay_en_mi_lado(estado.tropas_enemigas, TANQUES_ENEMY):
         valor += 0.3
 
-    # +0.3 si hay minitanques enemigos en mi lado de la arena
-    minitanques_en_mi_lado = any(
-        t.tipo in MINITANQUES_ENEMY and t.y_norm > MITAD_CAMPO_Y
-        for t in estado.tropas_enemigas
-    )
-    if minitanques_en_mi_lado:
+    # +0.2 si hay minitanques enemigos en mi lado
+    if hay_en_mi_lado(estado.tropas_enemigas, MINITANQUES_ENEMY):
+        valor += 0.2
+
+    # +0.3 si hay tropas de rango enemigos en mi lado
+    if hay_en_mi_lado(estado.tropas_enemigas, RANGE_TROOPS_ENEMY):
         valor += 0.3
 
-    # +0.3 si hay un tanque aliado
-    tanques_aliados = any(
-        t.tipo in (TANQUES)
-        for t in estado.tropas_aliadas
-    )
-    if tanques_aliados:
-        valor += 0.3
-    
-
-    # -0.4 si hay swarms enemigos en mi lado de la arena
-    swarms_en_mi_lado = any(
-        t.tipo in SWARMS_ENEMY and t.y_norm > MITAD_CAMPO_Y
-        for t in estado.tropas_enemigas
-    )
-    if swarms_en_mi_lado:
-        valor -= 0.3
-
-    # -0.2 si hay swarms enemigos
-    swarms_en_campo = any(
-        t.tipo in SWARMS_ENEMY
-        for t in estado.tropas_enemigas
-    )
-    if swarms_en_campo:
+    # -0.2 si hay swarms enemigos en mi lado
+    if hay_en_mi_lado(estado.tropas_enemigas, SWARMS_ENEMY):
         valor -= 0.2
+
+    # -0.2 si hay swarms enemigos en el campo
+    if hay_en_campo(estado.tropas_enemigas, SWARMS_ENEMY):
+        valor -= 0.2
+    
+    # +0.3 si hay tanques aliados en mi lado
+    if hay_en_mi_lado(estado.tropas_aliadas, TANQUES):
+        valor += 0.3
+
+    # +0.2 si hay tanques aliados en el campo
+    if hay_en_campo(estado.tropas_aliadas, TANQUES):
+        valor += 0.2
+    
+    # +0.3 si hay wincons enemigos en mi lado
+    if hay_en_mi_lado(estado.tropas_enemigas, WINCONS_ENEMY):
+        valor += 0.3
+    
+    # -0.2 si hay wincons voladoras enemigos en el campo
+    if hay_en_campo(estado.tropas_enemigas, RANGE_FLY_ENEMY):
+        valor -= 0.2
+    
+    # +0.1 si hay pekkas enemigos en mi lado
+    if hay_en_campo(estado.tropas_enemigas, BIG_TROOP_ENEMY):
+        valor += 0.1
     
     return round(min(valor, 1.0), 2)
 
 def val_megaminion(estado: GameState):
     valor = 0.1
 
-    if estado.elixir > 8:
-        valor += 0.1
+    # +0.2 si hay tanques enemigos en mi lado
+    if hay_en_mi_lado(estado.tropas_enemigas, TANQUES_ENEMY):
+        valor += 0.2
 
-    # +0.3 si hay un tanque enemigo en mi lado de la arena
-    tanques_en_mi_lado = any(
-        t.tipo in (TANQUES_ENEMY | MINITANQUES_ENEMY) and t.y_norm > MITAD_CAMPO_Y
-        for t in estado.tropas_enemigas
-    )
-    if tanques_en_mi_lado:
+    # +0.3 si hay minitanques enemigos en mi lado
+    if hay_en_mi_lado(estado.tropas_enemigas, MINITANQUES_ENEMY):
         valor += 0.3
 
-    if any(t.tipo in RANGE_TROOPS_ENEMY for t in estado.tropas_enemigas):
-        valor -= 0.4
+    # +0.1 si hay tanques aliados en mi lado
+    if hay_en_mi_lado(estado.tropas_aliadas, TANQUES):
+        valor += 0.1
     
-    # +0.4 si hay un tanque aliado en mi lado de la arena
-    tanques_aliados = any(
-        t.tipo in (TANQUES | MINITANQUES) and t.y_norm > MITAD_CAMPO_Y
-        for t in estado.tropas_aliadas
-    )
-    if tanques_aliados:
+    # +0.2 si hay wincons enemigos en mi lado
+    if hay_en_mi_lado(estado.tropas_enemigas, WINCONS_ENEMY):
         valor += 0.2
+    
+    # +0.5 si hay wincons voladoras enemigos en mi lado
+    if hay_en_mi_lado(estado.tropas_enemigas, WINCONS_FLY_ENEMY):
+        valor += 0.5
+
+    # +0.2 si hay tropas voladoras enemigos en el campo
+    if hay_en_campo(estado.tropas_enemigas, RANGE_FLY_ENEMY):
+        valor += 0.2
+
+    # +0.3 si hay pekkas enemigos en mi lado
+    if hay_en_campo(estado.tropas_enemigas, BIG_TROOP_ENEMY):
+        valor += 0.3
+
+    # -0.2 si hay rangetroop enemigos en el campo
+    if hay_en_campo(estado.tropas_enemigas, BIG_TROOP_ENEMY):
+        valor -= 0.2
     
     return round(min(valor, 1.0), 2)
 
 def val_dark_prince(estado: GameState):
     valor = 0.1
 
-    if estado.tropas_aliadas:
+    # +0.1 si hay tanques enemigos en mi lado
+    if hay_en_mi_lado(estado.tropas_enemigas, TANQUES_ENEMY):
+        valor += 0.1
+
+    # +0.2 si hay minitanques enemigos en mi lado
+    if hay_en_mi_lado(estado.tropas_enemigas, MINITANQUES_ENEMY):
         valor += 0.2
 
-    # +0.2 si hay un tanque enemigo en mi lado de la arena
-    tanques_en_mi_lado = any(
-        t.tipo in (TANQUES_ENEMY | MINITANQUES_ENEMY) and t.y_norm > MITAD_CAMPO_Y
-        for t in estado.tropas_enemigas
-    )
-    if tanques_en_mi_lado:
+    # +0.2 si hay tropas de rango enemigos en mi lado
+    if hay_en_mi_lado(estado.tropas_enemigas, RANGE_TROOPS_ENEMY):
+        valor += 0.2
+
+    # +0.2 si hay swarms enemigos en mi lado
+    if hay_en_mi_lado(estado.tropas_enemigas, SWARMS_ENEMY):
+        valor += 0.2
+
+    # +0.1 si hay swarms enemigos en el campo
+    if hay_en_campo(estado.tropas_enemigas, SWARMS_ENEMY):
+        valor += 0.1
+    
+    # +0.2 si hay tanques aliados en mi lado
+    if hay_en_mi_lado(estado.tropas_aliadas, TANQUES):
+        valor += 0.2
+
+    # +0.1 si hay tanques aliados en el campo
+    if hay_en_campo(estado.tropas_aliadas, TANQUES):
+        valor += 0.1
+    
+    # +0.2 si hay wincons enemigos en mi lado
+    if hay_en_mi_lado(estado.tropas_enemigas, WINCONS_ENEMY):
         valor += 0.2
     
-    # +0.3 si hay un antiaereo enemigo en mi lado de la arena
-    aircounters_en_mi_lado = any(
-        t.tipo in (RANGE_TROOPS_ENEMY) and t.y_norm > MITAD_CAMPO_Y-0.1
-        for t in estado.tropas_enemigas
-    )
-    if aircounters_en_mi_lado:
-        valor += 0.3
-
-    # +0.2 si hay minitanques enemigos en mi lado de la arena
-    minitanques_en_mi_lado = any(
-        t.tipo in MINITANQUES_ENEMY and t.y_norm > MITAD_CAMPO_Y
-        for t in estado.tropas_enemigas
-    )
-    if minitanques_en_mi_lado:
+    # -0.2 si hay tropas voladoras enemigos en el campo
+    if hay_en_campo(estado.tropas_enemigas, RANGE_FLY_ENEMY):
+        valor -= 0.2
+    
+    # +0.2 si hay pekkas enemigos en mi lado
+    if hay_en_campo(estado.tropas_enemigas, BIG_TROOP_ENEMY):
         valor += 0.2
 
     return round(min(valor, 1.0), 2)
 
 
 def valor_esperar(estado: GameState):
-    valor = 0.5
+    valor = max(0.0, 1.0 - estado.elixir / 10) * 0.6
 
-    if estado.elixir > 9:
-        valor = 0.0
-    elif estado.elixir > 8:
-        valor = 0.1
-    elif estado.elixir > 5:
-        valor = 0.3
-    elif estado.elixir > 4:
-        valor = 0.4
-
-    return valor
+    return round(max(0.0, min(valor, 1.0)), 2)
 
 def calcular_posicion_objetivo_hechizo(nombre_carta: str, estado: GameState):
-    _, centro = mejor_objetivo_hechizo(nombre_carta, estado)
-    if centro is not None:
-        x_centro, y_centro = centro
+    _, punto = mejor_objetivo_hechizo(nombre_carta, estado)
+    if punto is not None:
+        return punto
 
-        # Sin aliadas cerca, compensamos el avance de la tropa hacia mi campo
-        y_ajustado = y_centro if hay_aliada_cerca(centro, estado) else y_centro + 0.07
-        return (x_centro, max(0.0, min(1.0, y_ajustado)))
+    # Fallback: princess tower enemiga (nunca la king tower)
+    for t in estado.tropas:
+        if t.tipo == "princess_tower_enemy":
+            punto = (t.x_norm, t.y_norm)
+            if not demasiado_cerca_king_tower(punto, estado):
+                return punto
 
-    # Fallback: torre enemiga
-    torres_enemigas = [t for t in estado.tropas if t.tipo in TORRES and t.tipo.endswith("_enemy")]
-    if torres_enemigas:
-        return (torres_enemigas[0].x_norm, torres_enemigas[0].y_norm)
     return (0.5, 0.3)
+
 
 # Diccionario que asocia cada carta con su funcion de valor
 FUNCIONES_DE_VALOR = {
@@ -959,6 +1042,7 @@ def puntuar_tanque(pos, estado: GameState, nombre_carta=None) -> float:
     distancia = math.hypot(x - objetivo_x, y - objetivo_y)
     return max(0.0, 1.0 - distancia * 4)
 
+PESO_DETRAS_TANQUE = 1.5
 
 def puntuar_minitanque(pos, estado: GameState, nombre_carta=None) -> float:
     if nombre_carta not in CARTAS_MINITANQUE:
@@ -966,27 +1050,29 @@ def puntuar_minitanque(pos, estado: GameState, nombre_carta=None) -> float:
     if not estado.tropas_enemigas and not estado.tropas_aliadas:
         return 0.0
     x, y = pos
+    opciones = []
 
+    # Opcion A: detras de mi tanque (prioritaria, sin penalizar por atacar)
+    tanque = tanque_aliado_en_campo(estado)
+    if tanque is not None:
+        objetivo_y = min(DEPLOY_Y_MAX, max(DEPLOY_Y_MIN, tanque.y_norm + OFFSET_DETRAS_TROPA))
+        distancia = math.hypot(x - tanque.x_norm, y - objetivo_y)
+        opciones.append(max(0.0, 1.0 - distancia * 4) * PESO_DETRAS_TANQUE)
+
+    # Opcion B: defender contra el enemigo mas adelantado en mi lado
     enemigo = tropa_enemiga_mas_adelantada_en_mi_lado(estado)
     if enemigo is not None:
         objetivo_x = enemigo.x_norm
         objetivo_y = min(DEPLOY_Y_MAX, enemigo.y_norm + OFFSET_DETRAS_TROPA)
         distancia = math.hypot(x - objetivo_x, y - objetivo_y)
-        return max(0.0, 1.0 - distancia * 3) * 2
+        opciones.append(max(0.0, 1.0 - distancia * 3) * 2)
 
-    peso_cercania = 0.5 if tropas_aliadas_atacando(estado) else 1.0
-    opciones = []
-    tanque = tanque_aliado_en_campo(estado)
-    if tanque is not None:
-        objetivo_y = min(DEPLOY_Y_MAX, tanque.y_norm + OFFSET_DETRAS_TROPA)
-        distancia = math.hypot(x - tanque.x_norm, y - objetivo_y)  # ahora usa x tambien
-        opciones.append(max(0.0, 1.0 - distancia * 4) * peso_cercania)
-        
+    # Opcion C: detras de la tropa aliada mas adelantada
     frontmost = tropa_aliada_mas_adelantada(estado)
-
     if frontmost is not None:
+        peso_cercania = 0.5 if tropas_aliadas_atacando(estado) else 1.0
         objetivo_y = max(DEPLOY_Y_MIN, frontmost.y_norm - OFFSET_DETRAS_TROPA)
-        distancia = math.hypot(x - frontmost.x_norm, y - objetivo_y)  # ahora usa x tambien
+        distancia = math.hypot(x - frontmost.x_norm, y - objetivo_y)
         opciones.append(max(0.0, 1.0 - distancia * 4) * peso_cercania)
 
     return max(opciones) if opciones else 0.0
@@ -1067,6 +1153,7 @@ def main():
     frame_count = 0
     prev_time = time.time()
     ultima_jugada_timestamp = 0
+    mano_visible_desde = None   # None = mano vacia (partida sin empezar)
     torre_tracker = TorreTracker()
 
     while True:
@@ -1094,6 +1181,18 @@ def main():
         torre_tracker.actualizar(estado.tropas)
 
         ahora = time.time()
+        # Controla desde cuando hay cartas reconocidas en la mano
+        if all(c is None for c in estado.mano):
+            mano_visible_desde = None          # partida no empezada o terminada
+            torre_tracker = TorreTracker()     # opcional: reinicia las torres para la siguiente partida
+        elif mano_visible_desde is None:
+            mano_visible_desde = ahora         # acaba de aparecer la primera carta
+
+        partida_lista = (
+            mano_visible_desde is not None
+            and ahora - mano_visible_desde >= COOLDOWN_INICIO_PARTIDA
+        )
+
         decision = None
         if ahora - ultima_jugada_timestamp > COOLDOWN_SEGUNDOS:
             decision = decidir_jugada(estado)
