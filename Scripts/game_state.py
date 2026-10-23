@@ -47,7 +47,7 @@ except ImportError:
 # ============ CONFIGURACION ============
 
 WINDOW_TITLE = "Clash Royale"
-MODEL_PATH = r"C:\DragonAI\runs\detect\train-10\weights\best.pt"
+MODEL_PATH = r"C:\DragonAI\runs\detect\train-13\weights\best.pt"
 HUD_CONFIG_PATH = "hud_config.json"
 TEMPLATES_DIR = "templates"
 
@@ -78,33 +78,35 @@ TORRES = {
 
 SWARMS_ENEMY = {"goblins_enemy", "spear_goblins_enemy", "bat_enemy", "bomber_enemy", "larry_enemy"}
 
-TROPAS_OBJETIVO_FIREBALL = {"musketeer_enemy", "barbarian_enemy", "squeleton_dragon_enemy", "wizard_enemy", "witch_enemy", "three_musketeer_enemy"}
+TROPAS_OBJETIVO_FIREBALL = {"musketeer_enemy", "barbarian_enemy", "squeleton_dragon_enemy", "wizard_enemy", "witch_enemy", "three_musketeer_enemy", "furnace_enemy", "hunter_enemy", "zappie_enemy"}
 
-TROPAS_OBJETIVO_FLECHAS = {"minions_enemy", "archers_enemy", "bomber_enemy"}
+TROPAS_OBJETIVO_FLECHAS = {"minions_enemy", "archers_enemy", "bomber_enemy", "dart_goblin_enemy"}
 
-RANGE_TROOPS_ENEMY = {"archers_enemy", "musketeer_enemy", "wizard_enemy", "witch_enemy", "three_musketeer_enemy", "bomber_enemy"}
+RANGE_TROOPS_ENEMY = {"archers_enemy", "musketeer_enemy", "wizard_enemy", "witch_enemy", "three_musketeer_enemy", "bomber_enemy", "dart_goblin_enemy", "furnace_enemy", "hunter_enemy", "zappie_enemy"}
 
 RANGE_FLY_ENEMY = {"baby_dragon_enemy", "flying_machine_enemy", "megaminion_enemy", "squeleton_dragon_enemy", "minions_enemy"}
 
-TANQUES_ENEMY = {"giant_enemy", "royal_giant_enemy"}
+TANQUES_ENEMY = {"giant_enemy", "royal_giant_enemy", "goblin_giant_enemy", "golem_enemy", "ice_golem_enemy", "rune_giant_enemy"}
 
-BIG_TROOP_ENEMY = {"pekka_enemy"}
+BIG_TROOP_ENEMY = {"pekka_enemy", "squeleton_giant_enemy"}
 
 WINCONS_ENEMY = {"battle_ram_enemy", "hog_rider_enemy", "piggie_enemy"}
 
-WINCONS_FLY_ENEMY = {"balloon_enemy", "megaminion_enemy"}
+WINCONS_FLY_ENEMY = {"balloon_enemy", "minion_giant_enemy"}
 
-MINITANQUES_ENEMY = {"knight_enemy", "minipekka_enemy", "goblin_brawler_enemy", "valkyrie_enemy", "pekka_enemy", "dark_prince_enemy", "prince_enemy", "royal_recruit_enemy", "barbarian_enemy"}
+MINITANQUES_ENEMY = {"knight_enemy", "minipekka_enemy", "goblin_brawler_enemy", "valkyrie_enemy", "pekka_enemy", "dark_prince_enemy", "prince_enemy", "royal_recruit_enemy", "barbarian_enemy", "elite_barbarian_enemy", "guard_enemy", "healer_enemy", "berserker_enemy"}
 
-ESTRUCUTAS_ENEMY = {"bomb_tower_enemy", "canon_enemy", "goblin_cage_enemy", "goblin_hut_enemy", "inferno_tower_enemy", "tombstone_enemy"}
+ESTRUCUTAS_ENEMY = {"bomb_tower_enemy", "canon_enemy", "goblin_cage_enemy", "goblin_hut_enemy", "inferno_tower_enemy", "tombstone_enemy", "tesla_enemy"}
 
-ESTRUCTURAS_OFFENSE_ENEMY = {"mortar_enemy"}
+ESTRUCTURAS_OFFENSE_ENEMY = {"mortar_enemy","xbow_enemy"}
 
 TANQUES = {"giant_player"}
 
 MINITANQUES = {"knight_player", "minipekka_player", "prince_player", "dark_prince_player"}
 
 AIR_COUNTERS = {"archers_player", "musketeer_player", "megaminion_player"}
+
+MINITANQUES_AEREOS = {"megaminion_player"}
 
 SPLASHERS = {"bomber_player"}
 
@@ -121,13 +123,11 @@ CARTAS_MINITANQUE = {"knight", "minipekka", "minions","prince", "dark_prince", "
 
 CARTAS_AIR_COUNTER = {"musketeer", "archers", "bomber"}
 
-OFFSET_DETRAS_TROPA = 0.08
+OFFSET_DETRAS_TROPA = 0.05
 
 TEMPLATE_REMATCH_PATH = r"C:\DragonAI\templates\jugar_de_nuevo.png"
 UMBRAL_MATCH_REMATCH = 0.75
 REVISAR_REMATCH_CADA_N_FRAMES = 15
-
-COOLDOWN_INICIO_PARTIDA = 5
 
 RADIO_CERCANIA_ALIADA_HECHIZO = 0.11
 
@@ -138,6 +138,12 @@ PESO_COLATERAL = 0.5
 SCORE_MINIMO_HECHIZO = {"fireball": 2.5, "arrows": 3.0}
 SCORE_ESCALA_HECHIZO = {"fireball": 6.0, "arrows": 6.0}
 # =========================================
+
+
+TEMPLATE_INICIO_PATH = r"C:\DragonAI\templates\logo_inicio.png"
+UMBRAL_MATCH_INICIO = 0.55
+REVISAR_INICIO_CADA_N_FRAMES = 5   # el logo dura poco, no conviene revisarlo cada 15
+COOLDOWN_INICIO_PARTIDA = 5        # segundos
 
 
 # ---------- ESTRUCTURA DE DATOS ----------
@@ -416,7 +422,7 @@ def peso_tropa_hechizo(tropa, nombre_carta):
     return PESO_COLATERAL
 
 DISTANCIA_MINIMA_KING_TOWER = 0.2
-OFFSET_Y_HECHIZO = 0.08
+OFFSET_Y_HECHIZO = 0.06
 
 
 def punto_lanzamiento_hechizo(centro, estado: GameState):
@@ -700,7 +706,7 @@ def val_bomber(estado: GameState):
 
     # +0.2 si hay swarms enemigos en el campo
     if hay_en_campo(estado.tropas_enemigas, SWARMS_ENEMY):
-        valor += 0.2
+        valor += 0.2 
     
     # +0.1 si hay tanques aliados en mi lado
     if hay_en_mi_lado(estado.tropas_aliadas, TANQUES):
@@ -937,6 +943,11 @@ PASO_REJILLA = 0.08   # cuanto mas pequeño, mas candidatos (mas preciso, mas le
 
 DEPLOY_Y_MIN_INVASION = 0.2  # mucho mas adelante, dentro del campo enemigo
 
+OFFSET_DETRAS_TANQUE = 0.04 
+
+Y_REPOSO = 0.70                                  # atras, sin llegar a las cartas
+CARRIL_X = {"izquierda": 0.27, "derecha": 0.73}  # ajusta a tus princess towers
+
 
 def generar_posiciones_candidatas(torres_destruidas=None):
     torres_destruidas = torres_destruidas or {"izquierda": False, "derecha": False}
@@ -1008,6 +1019,21 @@ def puntuar_campo_vacio(pos, estado: GameState, nombre_carta=None) -> float:
 
     return max(0.0, 1.0 - distancia_centro * 2) + max(0.0, 1.0 - distancia_atras * 3)
 
+def carril_de_amenaza(estado: GameState):
+    """x del carril por el que viene el enemigo. Usa la tropa enemiga mas
+    adelantada (mayor y_norm) y la ajusta al centro de su carril.
+    Si no hay enemigos, devuelve el centro (0.5)."""
+    if not estado.tropas_enemigas:
+        return 0.5
+    t = max(estado.tropas_enemigas, key=lambda t: t.y_norm)
+    return CARRIL_X["izquierda"] if t.x_norm < 0.5 else CARRIL_X["derecha"]
+
+def puntuar_posicion_reposo(pos, estado: GameState) -> float:
+    """Atras y en el carril enemigo. Sirve cuando no hay nada mejor que hacer."""
+    x, y = pos
+    objetivo_x = carril_de_amenaza(estado)
+    distancia = math.hypot(x - objetivo_x, y - Y_REPOSO)
+    return max(0.0, 1.0 - distancia * 3)
 
 def puntuar_tanque(pos, estado: GameState, nombre_carta=None) -> float:
     if nombre_carta not in CARTAS_TANQUE:
@@ -1055,7 +1081,7 @@ def puntuar_minitanque(pos, estado: GameState, nombre_carta=None) -> float:
     # Opcion A: detras de mi tanque (prioritaria, sin penalizar por atacar)
     tanque = tanque_aliado_en_campo(estado)
     if tanque is not None:
-        objetivo_y = min(DEPLOY_Y_MAX, max(DEPLOY_Y_MIN, tanque.y_norm + OFFSET_DETRAS_TROPA))
+        objetivo_y = min(DEPLOY_Y_MAX, max(DEPLOY_Y_MIN, tanque.y_norm + OFFSET_DETRAS_TANQUE))
         distancia = math.hypot(x - tanque.x_norm, y - objetivo_y)
         opciones.append(max(0.0, 1.0 - distancia * 4) * PESO_DETRAS_TANQUE)
 
@@ -1071,11 +1097,13 @@ def puntuar_minitanque(pos, estado: GameState, nombre_carta=None) -> float:
     frontmost = tropa_aliada_mas_adelantada(estado)
     if frontmost is not None:
         peso_cercania = 0.5 if tropas_aliadas_atacando(estado) else 1.0
-        objetivo_y = max(DEPLOY_Y_MIN, frontmost.y_norm - OFFSET_DETRAS_TROPA)
+        objetivo_y = max(DEPLOY_Y_MIN, frontmost.y_norm - OFFSET_DETRAS_TANQUE)
         distancia = math.hypot(x - frontmost.x_norm, y - objetivo_y)
         opciones.append(max(0.0, 1.0 - distancia * 4) * peso_cercania)
 
-    return max(opciones) if opciones else 0.0
+    if opciones:
+        return max(opciones)
+    return puntuar_posicion_reposo(pos, estado)
 
 
 def puntuar_air_counter(pos, estado: GameState, nombre_carta=None) -> float:
@@ -1103,7 +1131,7 @@ def puntuar_air_counter(pos, estado: GameState, nombre_carta=None) -> float:
         return max(0.0, 1.0 - distancia * 4)
         #return max(0.0, 1.0 - abs(y - objetivo_y) * 4)
 
-    return 0.0
+    return puntuar_posicion_reposo(pos, estado)
 
 FUNCIONES_POSICION = [
     puntuar_campo_vacio,
@@ -1141,19 +1169,28 @@ def main():
         print("Aviso: no hay plantillas de cartas en 'templates/', la mano saldra vacia.")
 
     sct = mss()
+
     plantilla_rematch = None
     if os.path.exists(TEMPLATE_REMATCH_PATH):
         plantilla_rematch = cv2.imread(TEMPLATE_REMATCH_PATH)
         print(f"Plantilla de 'Jugar de Nuevo' cargada desde: {TEMPLATE_REMATCH_PATH}")
     else:
         print(f"Aviso: no se encontro '{TEMPLATE_REMATCH_PATH}', el auto-rematch estara desactivado.")
+
+    plantilla_inicio = None
+    if os.path.exists(TEMPLATE_INICIO_PATH):
+        plantilla_inicio = cv2.imread(TEMPLATE_INICIO_PATH)
+        print(f"Plantilla de logo de inicio cargada: {TEMPLATE_INICIO_PATH}")
+    else:
+        print(f"Aviso: no se encontro '{TEMPLATE_INICIO_PATH}', no habra espera al inicio de partida.")
+
     region = find_window_region(WINDOW_TITLE, exclude_substring=PREVIEW_WINDOW_TITLE) or FALLBACK_REGION
     print(f"Capturando region inicial: {region}")
 
     frame_count = 0
     prev_time = time.time()
     ultima_jugada_timestamp = 0
-    mano_visible_desde = None   # None = mano vacia (partida sin empezar)
+    ultimo_logo_timestamp = None   # None = logo nunca visto -> se puede jugar
     torre_tracker = TorreTracker()
 
     while True:
@@ -1163,8 +1200,9 @@ def main():
                 region = nueva
 
         frame = capturar_frame(sct, region)
+        ahora = time.time()
 
-        # NUEVO: comprobar el boton de rematch cada N frames
+        # --- Rematch: pulsar "Jugar de Nuevo" ---
         if plantilla_rematch is not None and frame_count % REVISAR_REMATCH_CADA_N_FRAMES == 0:
             encontrado, cx, cy, score = buscar_boton_rematch(frame, plantilla_rematch)
             if encontrado:
@@ -1174,27 +1212,28 @@ def main():
                 pyautogui.click(x_absoluto, y_absoluto)
                 time.sleep(2)  # da tiempo a que cargue la siguiente partida
                 frame_count += 1
-                continue  # salta el resto de la iteracion (no tiene sentido jugar cartas en la pantalla de resultados)
+                continue
 
+        # --- Logo de inicio: bloquea las jugadas 2 s tras verse ---
+        if plantilla_inicio is not None and frame_count % REVISAR_INICIO_CADA_N_FRAMES == 0:
+            visto, _, _, score_inicio = buscar_boton_rematch(frame, plantilla_inicio, UMBRAL_MATCH_INICIO)
+            if visto:
+                if ultimo_logo_timestamp is None or ahora - ultimo_logo_timestamp > 5:
+                    torre_tracker = TorreTracker()   # partida nueva: reinicia torres
+                    print(f"[inicio] Logo detectado (score={score_inicio:.2f})")
+                ultimo_logo_timestamp = ahora
+
+        # --- Percepcion ---
         estado, resultados_yolo = construir_game_state(frame, modelo_yolo, hud_config, plantillas)
-
         torre_tracker.actualizar(estado.tropas)
 
-        ahora = time.time()
-        # Controla desde cuando hay cartas reconocidas en la mano
-        if all(c is None for c in estado.mano):
-            mano_visible_desde = None          # partida no empezada o terminada
-            torre_tracker = TorreTracker()     # opcional: reinicia las torres para la siguiente partida
-        elif mano_visible_desde is None:
-            mano_visible_desde = ahora         # acaba de aparecer la primera carta
-
+        # --- Decision y accion ---
         partida_lista = (
-            mano_visible_desde is not None
-            and ahora - mano_visible_desde >= COOLDOWN_INICIO_PARTIDA
+            ultimo_logo_timestamp is None
+            or ahora - ultimo_logo_timestamp >= COOLDOWN_INICIO_PARTIDA
         )
 
-        decision = None
-        if ahora - ultima_jugada_timestamp > COOLDOWN_SEGUNDOS:
+        if partida_lista and ahora - ultima_jugada_timestamp > COOLDOWN_SEGUNDOS:
             decision = decidir_jugada(estado)
 
             if decision is not None:
@@ -1209,12 +1248,15 @@ def main():
 
         print(estado.resumen())
 
-        # Visualizacion: dibuja las cajas de YOLO + info de HUD encima
+        # --- Visualizacion ---
         vista = resultados_yolo[0].plot()
         cv2.putText(vista, f"Elixir: {estado.elixir}", (10, 30),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
         cv2.putText(vista, f"Mano: {estado.mano}", (10, 60),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+        if not partida_lista:
+            cv2.putText(vista, "ESPERANDO INICIO", (10, 90),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
 
         now = time.time()
         fps = 1.0 / max(now - prev_time, 1e-6)
