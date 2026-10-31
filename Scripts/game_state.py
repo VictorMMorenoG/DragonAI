@@ -155,6 +155,9 @@ REVISAR_X2_CADA_N_FRAMES = 15
 MULTIPLICADOR_ELIXIR_X1 = 0.6   # valor de las cartas fuera de x2
 SEGUNDOS_PERSISTENCIA_X2 = 3 
 
+MULTIPLICADOR_PERDIENDO = 1.4
+MARGEN_VIDA_TORRES = 0.20   # diferencia de vida total (suma de 2 princess, rango 0-2) para decir quien va ganando si hay las mismas coronas
+
 # ---------- ESTRUCTURA DE DATOS ----------
 
 @dataclass
@@ -480,6 +483,30 @@ class VidaTorresTracker:
 
         return dict(self.vida)
 
+def estado_torres(estado: GameState) -> str:
+    """'ganando', 'perdiendo' o 'igualado' segun las princess towers.
+    1) Coronas: princess destruidas de cada bando.
+    2) Si empatan, vida total restante de las princess (con margen)."""
+    d = estado.torres_destruidas or {}
+    v = estado.vida_torres
+
+    enemy_izq = 0.0 if d.get("izquierda") else v.get("enemy_izq", 1.0)
+    enemy_der = 0.0 if d.get("derecha") else v.get("enemy_der", 1.0)
+    player_izq = v.get("player_izq", 1.0)
+    player_der = v.get("player_der", 1.0)
+
+    mis_coronas = (enemy_izq <= 0.0) + (enemy_der <= 0.0)
+    coronas_rival = (player_izq <= 0.0) + (player_der <= 0.0)
+    if mis_coronas != coronas_rival:
+        return "ganando" if mis_coronas > coronas_rival else "perdiendo"
+
+    mi_vida = player_izq + player_der
+    vida_rival = enemy_izq + enemy_der
+    if mi_vida < vida_rival - MARGEN_VIDA_TORRES:
+        return "perdiendo"
+    if mi_vida > vida_rival + MARGEN_VIDA_TORRES:
+        return "ganando"
+    return "igualado"
 
 # ---------- LOGICA DE CARTAS BASICA ----------
 
@@ -1557,6 +1584,12 @@ def main():
         estado.vida_torres = vida_tracker.actualizar(frame, estado.tropas, torre_tracker.destruida, torre_tracker_player.destruida)
         estado.torres_destruidas = torre_tracker.destruida
 
+        situacion = estado_torres(estado)
+        multiplicador_total = multiplicador * (
+            MULTIPLICADOR_PERDIENDO if situacion == "perdiendo" else 1.0
+        )
+        estado.torres_destruidas = torre_tracker.destruida
+
         if frame_count % 30 == 0:
             depurar_barras(frame, estado.tropas)   # quitar al terminar de calibrar
 
@@ -1568,7 +1601,7 @@ def main():
         )
 
         if partida_lista and ahora - ultima_jugada_timestamp > COOLDOWN_SEGUNDOS:
-            decision = decidir_jugada(estado, multiplicador)
+            decision = decidir_jugada(estado, multiplicador_total)
 
             if decision is not None:
                 if decision["carta"] in HECHIZOS:
@@ -1609,7 +1642,7 @@ def main():
         prev_time = now
         cv2.putText(vista, f"FPS: {fps:.1f}", (10, vista.shape[0] - 15),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
-
+        cv2.putText(vista, f"Torres: {situacion} (x{multiplicador_total:.2f})", (10, 150), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
         cv2.imshow(PREVIEW_WINDOW_TITLE, vista)
         crono.informar()
         frame_count += 1
