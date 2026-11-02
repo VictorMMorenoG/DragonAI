@@ -49,7 +49,7 @@ except ImportError:
 # ============ CONFIGURACION ============
 
 WINDOW_TITLE = "Clash Royale"
-MODEL_PATH = r"C:\DragonAI\runs\detect\train-13\weights\best.pt"
+MODEL_PATH = r"C:\DragonAI\runs\detect\train-14\weights\best.pt"
 HUD_CONFIG_PATH = "hud_config.json"
 TEMPLATES_DIR = "templates"
 
@@ -82,23 +82,23 @@ SWARMS_ENEMY = {"goblins_enemy", "spear_goblins_enemy", "bomber_enemy", "larry_e
 
 SWARMS_FLY_ENEMY = {"minions_enemy", "bat_enemy"}
 
-TROPAS_OBJETIVO_FIREBALL = {"musketeer_enemy", "barbarian_enemy", "squeleton_dragon_enemy", "wizard_enemy", "witch_enemy", "three_musketeer_enemy", "furnace_enemy", "hunter_enemy", "zappie_enemy"}
+TROPAS_OBJETIVO_FIREBALL = {"musketeer_enemy", "barbarian_enemy", "squeleton_dragon_enemy", "wizard_enemy", "witch_enemy", "three_musketeer_enemy", "furnace_enemy", "hunter_enemy", "zappie_enemy", "ice_wizard_enemy", "electro_wizard_enemy", "hero_wizard_enemy"}
 
-TROPAS_OBJETIVO_FLECHAS = {"minions_enemy", "archers_enemy", "bomber_enemy", "dart_goblin_enemy", "bat_enemy"}
+TROPAS_OBJETIVO_FLECHAS = {"minions_enemy", "archers_enemy", "bomber_enemy", "dart_goblin_enemy", "bat_enemy", "firecracker_enemy", "princess_enemy"}
 
-RANGE_TROOPS_ENEMY = {"archers_enemy", "musketeer_enemy", "wizard_enemy", "witch_enemy", "three_musketeer_enemy", "bomber_enemy", "dart_goblin_enemy", "furnace_enemy", "hunter_enemy", "zappie_enemy"}
+RANGE_TROOPS_ENEMY = {"archers_enemy", "musketeer_enemy", "wizard_enemy", "witch_enemy", "three_musketeer_enemy", "bomber_enemy", "dart_goblin_enemy", "furnace_enemy", "hunter_enemy", "zappie_enemy", "firecracker_enemy", "goblin_demolisher_enemy", "ice_wizard_enemy", "princess_enemy", "electro_wizard_enemy", "hero_wizard_enemy"}
 
-RANGE_FLY_ENEMY = {"baby_dragon_enemy", "flying_machine_enemy", "megaminion_enemy", "squeleton_dragon_enemy", "minions_enemy"}
+RANGE_FLY_ENEMY = {"baby_dragon_enemy", "flying_machine_enemy", "megaminion_enemy", "squeleton_dragon_enemy", "minions_enemy", "electro_dragon_enemy","phoenix_enemy", "inferno_dragon_enemy"}
 
 TANQUES_ENEMY = {"giant_enemy", "royal_giant_enemy", "goblin_giant_enemy", "golem_enemy", "ice_golem_enemy", "rune_giant_enemy"}
 
-BIG_TROOP_ENEMY = {"pekka_enemy", "squeleton_giant_enemy"}
+BIG_TROOP_ENEMY = {"pekka_enemy", "squeleton_giant_enemy", "mega_knight_enemy", "sparky_enemy"}
 
-WINCONS_ENEMY = {"battle_ram_enemy", "hog_rider_enemy", "piggie_enemy"}
+WINCONS_ENEMY = {"battle_ram_enemy", "hog_rider_enemy", "piggie_enemy", "wallbreaker_enemy", "ram_raider_enemy"}
 
 WINCONS_FLY_ENEMY = {"balloon_enemy", "minion_giant_enemy", "squeleton_barrel_enemy"}
 
-MINITANQUES_ENEMY = {"knight_enemy", "minipekka_enemy", "goblin_brawler_enemy", "valkyrie_enemy", "pekka_enemy", "dark_prince_enemy", "prince_enemy", "royal_recruit_enemy", "barbarian_enemy", "elite_barbarian_enemy", "guard_enemy", "healer_enemy", "berserker_enemy"}
+MINITANQUES_ENEMY = {"knight_enemy", "minipekka_enemy", "goblin_brawler_enemy", "valkyrie_enemy", "pekka_enemy", "dark_prince_enemy", "prince_enemy", "royal_recruit_enemy", "barbarian_enemy", "elite_barbarian_enemy", "guard_enemy", "healer_enemy", "berserker_enemy", "royal_ghost_enemy", "miner_enemy", "hero_minipekka_enemy"}
 
 ESTRUCUTAS_ENEMY = {"bomb_tower_enemy", "canon_enemy", "goblin_cage_enemy", "goblin_hut_enemy", "inferno_tower_enemy", "tombstone_enemy", "tesla_enemy"}
 
@@ -419,50 +419,129 @@ BARRA_Y_ENEMY = (-0.17, -0.05)   # encima de la torre
 BARRA_Y_PLAYER = (0.64, 0.76)    # dentro, en la parte baja
 BARRA_DESPLAZAMIENTO_X = 0.015   # fraccion del ancho de la ventana; positivo = derecha
 
+
+def leer_vida_torre(frame, t):
+    h, w = frame.shape[:2]
+    x1, y1, x2, y2 = region_barra(t, w, h)
+    if x2 <= x1 or y2 <= y1:
+        return None
+    mascara = mascara_barra(frame[y1:y2, x1:x2], bando_de(t))
+    cols = np.where(np.any(mascara, axis=0))[0]
+    if len(cols) < BARRA_PX_MINIMOS:
+        return None
+    relleno = cols.max() - cols.min() + 1
+    return float(min(1.0, relleno / (x2 - x1)))
+
+# ---------- NUEVO SISTEMA DE LECTURA DE BARRA DE TORRES ----------
+BARRA_Y_AUTO = {}   # bando -> (desde, hasta); lo rellena la autocalibracion
+
+# Banda amplia donde buscar la barra (fraccion del alto de la caja, desde su borde superior)
+BARRA_BUSQUEDA_Y = {"enemy": (-0.50, 0.25), "player": (0.30, 1.00)}
+BARRA_ALTO_PX = (4, 20)      # alto plausible de una barra en pixeles
+AUTOCAL_LECTURAS = 5         # detecciones consecutivas coherentes para fijar
+AUTOCAL_TOLERANCIA = 0.03    # variacion maxima entre ellas (fraccion del alto de la caja)
+
+def bando_de(t):
+    return "enemy" if t.tipo.endswith("_enemy") else "player"
+
+
+def rango_x_barra(t, w):
+    cx = (t.x_norm + BARRA_DESPLAZAMIENTO_X) * w
+    mitad = ANCHO_BARRA_NORM * w / 2 * 0.96
+    return int(max(0, cx - mitad)), int(min(w, cx + mitad))
+
+
 def region_barra(t, w, h):
-    desde, hasta = BARRA_Y_ENEMY if t.tipo.endswith("_enemy") else BARRA_Y_PLAYER
-    cx = (t.x_norm + BARRA_DESPLAZAMIENTO_X) * w   # antes: t.x_norm * w
+    bando = bando_de(t)
+    desde, hasta = BARRA_Y_AUTO.get(bando) or (
+        BARRA_Y_ENEMY if bando == "enemy" else BARRA_Y_PLAYER)
     alto = t.h_norm * h
     top = t.y_norm * h - alto / 2
-    mitad = ANCHO_BARRA_NORM * w / 2 * 1.05
-    x1, x2 = int(max(0, cx - mitad)), int(min(w, cx + mitad))
+    x1, x2 = rango_x_barra(t, w)
     y1 = int(max(0, top + desde * alto))
     y2 = int(min(h, top + hasta * alto))
     return x1, y1, x2, y2
 
 
-def leer_vida_torre(frame, t):
-    """Fraccion 0-1 de vida, o None si no se ve barra (torre intacta)."""
-    h, w = frame.shape[:2]
-    x1, y1, x2, y2 = region_barra(t, w, h)
-    if x2 <= x1 or y2 <= y1:
-        return None
-
-    bando = "enemy" if t.tipo.endswith("_enemy") else "player"
+def mascara_barra(zona_bgr, bando):
     cfg = BARRA_HSV[bando]
-    hsv = cv2.cvtColor(frame[y1:y2, x1:x2], cv2.COLOR_BGR2HSV)
-    mascara = (
+    hsv = cv2.cvtColor(zona_bgr, cv2.COLOR_BGR2HSV)
+    return (
         (hsv[..., 0] >= cfg["h"][0]) & (hsv[..., 0] <= cfg["h"][1])
         & (hsv[..., 1] >= cfg["s_min"]) & (hsv[..., 2] >= cfg["v_min"])
     )
 
-    cols = np.where(np.any(mascara, axis=0))[0]
-    if len(cols) < BARRA_PX_MINIMOS:
+def buscar_banda_barra(mascara):
+    """(fila_ini, fila_fin) de la franja de filas con mas color de barra,
+    o None si no hay nada con forma de barra."""
+    activas = list(mascara.sum(axis=1) >= BARRA_PX_MINIMOS) + [False]
+    mejor, mejor_suma, ini = None, 0, None
+    for i, activa in enumerate(activas):
+        if activa and ini is None:
+            ini = i
+        elif not activa and ini is not None:
+            suma = int(mascara[ini:i].sum())
+            if suma > mejor_suma:
+                mejor, mejor_suma = (ini, i), suma
+            ini = None
+    if mejor is None:
         return None
-
-    relleno = cols.max() - cols.min() + 1
-    return float(min(1.0, relleno / (x2 - x1)))
-
+    if not (BARRA_ALTO_PX[0] <= mejor[1] - mejor[0] <= BARRA_ALTO_PX[1]):
+        return None
+    # la barra se rellena desde la izquierda: debe empezar cerca del borde izquierdo
+    cols = np.where(mascara[mejor[0]:mejor[1]].any(axis=0))[0]
+    if cols.min() > 0.2 * mascara.shape[1]:
+        return None
+    return mejor
 
 class VidaTorresTracker:
     def __init__(self):
         self.historial = {}
         self.vida = {}
+        self.candidatos = {"enemy": [], "player": []}
+        BARRA_Y_AUTO.clear()   # partida nueva: vuelve a calibrar
+
+    def _autocalibrar(self, frame, t):
+        bando = bando_de(t)
+        h, w = frame.shape[:2]
+        desde_b, hasta_b = BARRA_BUSQUEDA_Y[bando]
+        alto = t.h_norm * h
+        top = t.y_norm * h - alto / 2
+        x1, x2 = rango_x_barra(t, w)
+        y1 = int(max(0, top + desde_b * alto))
+        y2 = int(min(h, top + hasta_b * alto))
+        if x2 <= x1 or y2 <= y1 or alto <= 0:
+            return
+
+        banda = buscar_banda_barra(mascara_barra(frame[y1:y2, x1:x2], bando))
+        cand = self.candidatos[bando]
+        if banda is None:
+            cand.clear()   # tienen que ser consecutivas
+            return
+
+        ini, fin = banda
+        centro = (y1 + (ini + fin) / 2 - top) / alto
+        semi = max((fin - ini) / 2 + 2, 3) / alto
+        cand.append((centro, semi))
+        del cand[:-AUTOCAL_LECTURAS]
+
+        if len(cand) == AUTOCAL_LECTURAS:
+            centros = [c for c, _ in cand]
+            if max(centros) - min(centros) <= AUTOCAL_TOLERANCIA:
+                c = float(np.median(centros))
+                s = float(np.median([s for _, s in cand]))
+                BARRA_Y_AUTO[bando] = (c - s, c + s)
+                print(f"[barra] {bando} calibrada: ({c - s:.3f}, {c + s:.3f})")
+                cand.clear()
 
     def actualizar(self, frame, tropas, destruidas_enemy=None, destruidas_player=None):
         for t in tropas:
             if t.tipo not in TORRES or t.tipo.startswith("king"):
                 continue
+
+            if bando_de(t) not in BARRA_Y_AUTO:
+                self._autocalibrar(frame, t)
+
             k = clave_torre(t)
             lectura = leer_vida_torre(frame, t)
             if lectura is None:
@@ -473,7 +552,6 @@ class VidaTorresTracker:
             mediana = float(sorted(hist)[len(hist) // 2])
             self.vida[k] = float(min(self.vida.get(k, 1.0), mediana))
 
-        # Torre destruida = vida 0, aunque ya no se lea ninguna barra
         for lado, clave in (("izquierda", "enemy_izq"), ("derecha", "enemy_der")):
             if destruidas_enemy and destruidas_enemy.get(lado):
                 self.vida[clave] = 0.0
@@ -482,6 +560,8 @@ class VidaTorresTracker:
                 self.vida[clave] = 0.0
 
         return dict(self.vida)
+
+
 
 def estado_torres(estado: GameState) -> str:
     """'ganando', 'perdiendo' o 'igualado' segun las princess towers.
@@ -551,12 +631,20 @@ PESO_OBJETIVO_HECHIZO = {
     "fireball": {
         "witch_enemy": 2.5,
         "three_musketeer_enemy": 2.5,
+        "hunter_enemy": 2,
+        "zappie_enemy": 2,
+        "ice_wizard_enemy": 2,
+        "electro_wizard_enemy": 2.5,
+        "hero_wizard_enemy": 2.5,
         "wizard_enemy": 2.5,
         "musketeer_enemy": 2,
         "squeleton_dragon_enemy": 1.5,
         "barbarian_enemy": 1,
     },
     "arrows": {
+        "princess_enemy": 3.0,
+        "firecracker_enemy": 2.5,
+        "dart_goblin_enemy": 2.5,
         "minions_enemy": 1.5,
         "archers_enemy": 1.5,
         "bomber_enemy": 1.5,
@@ -829,7 +917,7 @@ def val_archers(estado: GameState):
         valor += 0.1
     
     # -0.2 si hay un mago enemigo en campo
-    if hay_en_campo(estado.tropas_aliadas, {"wizard_enemy"}):
+    if hay_en_campo(estado.tropas_enemigas, {"wizard_enemy"}):
         valor -= 0.2
 
     # +0.3 si hay wincons voladoras enemigos en mi lado
@@ -844,7 +932,7 @@ def val_archers(estado: GameState):
     if hay_en_campo(estado.tropas_enemigas, BIG_TROOP_ENEMY):
         valor += 0.2
 
-    # -0.3 si hay swarms aereas enemigos en el campo
+    # +0.3 si hay swarms aereas enemigos en el campo
     if hay_en_campo(estado.tropas_enemigas, SWARMS_FLY_ENEMY):
         valor += 0.3
     
@@ -972,7 +1060,7 @@ def val_megaminion(estado: GameState):
         valor += 0.3
 
     # -0.2 si hay rangetroop enemigos en el campo
-    if hay_en_campo(estado.tropas_enemigas, BIG_TROOP_ENEMY):
+    if hay_en_campo(estado.tropas_enemigas, RANGE_TROOPS_ENEMY):
         valor -= 0.2
 
     # +0.3 si hay swarms aereas enemigos en el campo
@@ -1573,9 +1661,6 @@ def main():
         )       
         multiplicador = 1.0 if en_x2 else MULTIPLICADOR_ELIXIR_X1
 
-        # --- Percepcion ---
-        estado, resultados_yolo = construir_game_state(frame, modelo_yolo, hud_config, plantillas)
-        torre_tracker.actualizar(estado.tropas)
 
          # --- Percepcion ---
         estado, resultados_yolo = construir_game_state(frame, modelo_yolo, hud_config, plantillas)
