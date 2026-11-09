@@ -50,7 +50,7 @@ except ImportError:
 # ============ CONFIGURACION ============
 
 WINDOW_TITLE = "Clash Royale"
-MODEL_PATH = r"C:\DragonAI\runs\detect\train-14\weights\best.pt"
+MODEL_PATH = r"C:\DragonAI\runs\detect\train-15\weights\best.pt"
 HUD_CONFIG_PATH = "hud_config.json"
 TEMPLATES_DIR = "templates"
 
@@ -81,29 +81,32 @@ TORRES = {
 
 SWARMS_ENEMY = {"goblins_enemy", "spear_goblins_enemy", "bomber_enemy", "larry_enemy"}
 
-SWARMS_FLY_ENEMY = {"minions_enemy", "bat_enemy"}
+SWARMS_FLY_ENEMY = {"minions_enemy", "bat_enemy", "lavapups_enemy"}
 
-TROPAS_OBJETIVO_FIREBALL = {"musketeer_enemy", "barbarian_enemy", "squeleton_dragon_enemy", "wizard_enemy", "witch_enemy", "three_musketeer_enemy", "furnace_enemy", "hunter_enemy", "zappie_enemy", "ice_wizard_enemy", "electro_wizard_enemy", "hero_wizard_enemy"}
+TROPAS_OBJETIVO_FIREBALL = {"musketeer_enemy", "barbarian_enemy", "squeleton_dragon_enemy", "wizard_enemy", "witch_enemy", "three_musketeer_enemy", "furnace_enemy", "hunter_enemy", "zappie_enemy", "ice_wizard_enemy", "electro_wizard_enemy", "hero_wizard_enemy", "magic_archer_enemy"}
 
-TROPAS_OBJETIVO_FLECHAS = {"minions_enemy", "archers_enemy", "bomber_enemy", "dart_goblin_enemy", "bat_enemy", "firecracker_enemy", "princess_enemy"}
+TROPAS_OBJETIVO_FLECHAS = {"minions_enemy", "archers_enemy", "bomber_enemy", "dart_goblin_enemy", "bat_enemy", "firecracker_enemy", "princess_enemy", "rascal_girl_enemy"}
 
-RANGE_TROOPS_ENEMY = {"archers_enemy", "musketeer_enemy", "wizard_enemy", "witch_enemy", "three_musketeer_enemy", "bomber_enemy", "dart_goblin_enemy", "furnace_enemy", "hunter_enemy", "zappie_enemy", "firecracker_enemy", "goblin_demolisher_enemy", "ice_wizard_enemy", "princess_enemy", "electro_wizard_enemy", "hero_wizard_enemy"}
+RANGE_TROOPS_ENEMY = {"archers_enemy", "musketeer_enemy", "wizard_enemy", "witch_enemy", "three_musketeer_enemy", "bomber_enemy", "dart_goblin_enemy", "furnace_enemy", "hunter_enemy", "zappie_enemy", "firecracker_enemy",
+                       "goblin_demolisher_enemy", "ice_wizard_enemy", "princess_enemy", "electro_wizard_enemy", "hero_wizard_enemy", "bowler_enemy", "executioner_enemy", "magic_archer_enemy", "rascal_girl_enemy"}
 
 RANGE_FLY_ENEMY = {"baby_dragon_enemy", "flying_machine_enemy", "megaminion_enemy", "squeleton_dragon_enemy", "minions_enemy", "electro_dragon_enemy","phoenix_enemy", "inferno_dragon_enemy"}
 
-TANQUES_ENEMY = {"giant_enemy", "royal_giant_enemy", "goblin_giant_enemy", "golem_enemy", "ice_golem_enemy", "rune_giant_enemy"}
+TANQUES_ENEMY = {"giant_enemy", "royal_giant_enemy", "goblin_giant_enemy", "golem_enemy", "ice_golem_enemy", "rune_giant_enemy", "elixir_golem_enemy", "electro_giant_enemy"}
 
 BIG_TROOP_ENEMY = {"pekka_enemy", "squeleton_giant_enemy", "mega_knight_enemy", "sparky_enemy"}
 
 WINCONS_ENEMY = {"battle_ram_enemy", "hog_rider_enemy", "piggie_enemy", "wallbreaker_enemy", "ram_raider_enemy"}
 
-WINCONS_FLY_ENEMY = {"balloon_enemy", "minion_giant_enemy", "squeleton_barrel_enemy"}
+WINCONS_FLY_ENEMY = {"balloon_enemy", "minion_giant_enemy", "squeleton_barrel_enemy", "lavahound_enemy"}
 
-MINITANQUES_ENEMY = {"knight_enemy", "minipekka_enemy", "goblin_brawler_enemy", "valkyrie_enemy", "pekka_enemy", "dark_prince_enemy", "prince_enemy", "royal_recruit_enemy", "barbarian_enemy", "elite_barbarian_enemy", "guard_enemy", "healer_enemy", "berserker_enemy", "royal_ghost_enemy", "miner_enemy", "hero_minipekka_enemy"}
+MINITANQUES_ENEMY = {"knight_enemy", "minipekka_enemy", "goblin_brawler_enemy", "valkyrie_enemy", "pekka_enemy", "dark_prince_enemy", "prince_enemy", "royal_recruit_enemy", "barbarian_enemy", "elite_barbarian_enemy",
+                      "guard_enemy", "healer_enemy", "berserker_enemy", "royal_ghost_enemy", "miner_enemy", "hero_minipekka_enemy", "invisible_goblin_enemy","bandit_enemy", "ronin_enemy", "night_witch_enemy", "lumberjack_enemy",
+                        "rascal_boy_enemy"}
 
 ESTRUCUTAS_ENEMY = {"bomb_tower_enemy", "canon_enemy", "goblin_cage_enemy", "goblin_hut_enemy", "inferno_tower_enemy", "tombstone_enemy", "tesla_enemy"}
 
-ESTRUCTURAS_OFFENSE_ENEMY = {"mortar_enemy","xbow_enemy"}
+ESTRUCTURAS_OFFENSE_ENEMY = {"mortar_enemy","xbow_enemy", "goblin_drill_enemy"}
 
 TANQUES = {"giant_player"}
 
@@ -169,7 +172,8 @@ ELIXIR_TROPA = {
     # Enjambres / baratas
     "bat_enemy": 0.7, "goblins_enemy": 0.7, "spear_goblins_enemy": 0.7,
     "larry_enemy": 0.4, "minions_enemy": 1.0, "minions_player": 1.0,
-    "fire_spirit_enemy": 1.0, "ice_spirit_enemy": 1.0, "electro_spirit_enemy": 1.0,
+    "fire_spirit_enemy": 1.0, "ice_spirit_enemy": 1.0, "electro_spirit_enemy": 1.0, "heal_spirit_enemy": 1.0,
+    "rascal_girl_enemy": 1.0, "lavapups_enemy": 0.7, "invisible_goblin_enemy": 2.0, "suspicious_bush_enemy": 2.0,
     "wallbreaker_enemy": 1.0, "guard_enemy": 1.0, "royal_recruit_enemy": 1.2,
     "barbarian_enemy": 1.25, "piggie_enemy": 1.25, "zappie_enemy": 1.3,
     "archers_enemy": 1.5, "archers_player": 1.5, "bomber_enemy": 2.0, "bomber_player": 2.0,
@@ -178,23 +182,23 @@ ELIXIR_TROPA = {
     # Tropas medias
     "knight_enemy": 3, "knight_player": 3, "megaminion_enemy": 3, "megaminion_player": 3,
     "goblin_brawler_enemy": 3, "ice_wizard_enemy": 3, "dart_goblin_enemy": 3,
-    "firecracker_enemy": 3, "princess_enemy": 3, "royal_ghost_enemy": 3,
+    "firecracker_enemy": 3, "princess_enemy": 3, "royal_ghost_enemy": 3, "rascal_boy_enemy": 3,
     "miner_enemy": 3, "squeleton_barrel_enemy": 3, "elite_barbarian_enemy": 3,
-    "three_musketeer_enemy": 3,
-    "minipekka_enemy": 4, "minipekka_player": 4, "hero_minipekka_enemy": 4,
-    "musketeer_enemy": 4, "musketeer_player": 4, "valkyrie_enemy": 4,
+    "three_musketeer_enemy": 3, "bandit_enemy": 3, "ronin_enemy": 5, "night_witch_enemy": 4, "lumberjack_enemy": 4,
+    "minipekka_enemy": 4, "minipekka_player": 4, "hero_minipekka_enemy": 4, "goblin_drill_enemy": 4,
+    "musketeer_enemy": 4, "musketeer_player": 4, "valkyrie_enemy": 4, "mortar_enemy": 4,
     "dark_prince_enemy": 4, "dark_prince_player": 4, "hog_rider_enemy": 4,
     "battle_ram_enemy": 4, "baby_dragon_enemy": 4, "inferno_dragon_enemy": 4,
     "electro_wizard_enemy": 4, "flying_machine_enemy": 4, "healer_enemy": 4,
     "hunter_enemy": 4, "phoenix_enemy": 4, "rune_giant_enemy": 4,
-    "goblin_demolisher_enemy": 4, "ram_raider_enemy": 5,
+    "goblin_demolisher_enemy": 4, "ram_raider_enemy": 5, "bowler_enemy": 5, "executioner_enemy": 5, "magic_archer_enemy": 4,
 
     # Pesadas
     "giant_enemy": 5, "giant_player": 5, "prince_enemy": 5, "prince_player": 5,
     "wizard_enemy": 5, "witch_enemy": 5, "balloon_enemy": 5, "electro_dragon_enemy": 5,
-    "hero_wizard_enemy": 5, "minion_giant_enemy": 5,
-    "royal_giant_enemy": 6, "goblin_giant_enemy": 6, "sparky_enemy": 6,
-    "squeleton_giant_enemy": 6, "mega_knight_enemy": 7, "pekka_enemy": 7, "golem_enemy": 8,
+    "hero_wizard_enemy": 5, "minion_giant_enemy": 5, "elixir_golem_enemy": 5,
+    "royal_giant_enemy": 6, "goblin_giant_enemy": 6, "sparky_enemy": 6, "xbow_enemy": 6,
+    "squeleton_giant_enemy": 6, "mega_knight_enemy": 7, "lavahound_enemy": 7, "pekka_enemy": 7, "golem_enemy": 8,
 
     # Torres: no cuentan como amenaza
     "king_tower_enemy": 0, "king_tower_player": 0,
